@@ -3,12 +3,14 @@ import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { secureHeaders } from 'hono/secure-headers'
 import { config } from './lib/config.js'
-import { admins, cerrar, conectar } from './lib/db.js'
-import { hashClave } from './lib/auth.js'
-import { limpiarTemporales } from './lib/almacenamiento.js'
-import { publica } from './rutas/publica.js'
-import { admin } from './rutas/admin.js'
-import { panel } from './panel/rutas.js'
+import { admins, connect, disconnect } from './lib/db.js'
+import { hashPassword } from './lib/auth.js'
+import { cleanTempFiles } from './lib/storage.js'
+import { publicRoutes } from './routes/public.js'
+import { adminRoutes } from './routes/admin.js'
+import { panel } from './panel/index.js'
+
+const UPLOAD_PATHS = new Set(['/api/admin/versions', '/panel/versions/new'])
 
 const app = new Hono<{ Bindings: HttpBindings }>()
 
@@ -16,16 +18,14 @@ const app = new Hono<{ Bindings: HttpBindings }>()
 app.use('*', secureHeaders({ referrerPolicy: 'same-origin' }))
 // Límite de cuerpo para todo salvo las subidas de jar (que van en flujo a disco)
 app.use('*', async (c, next) => {
-  if (c.req.method === 'POST' && (c.req.path === '/api/admin/versiones' || c.req.path === '/panel/versiones/subir')) {
-    return next()
-  }
-  return bodyLimit({ maxSize: 64 * 1024 })(c, next)
+  if (c.req.method === 'POST' && UPLOAD_PATHS.has(c.req.path)) return next()
+  return bodyLimit({ maxSize: 256 * 1024 })(c, next)
 })
 
-app.get('/', (c) => c.redirect('/panel/versiones'))
-app.get('/salud', (c) => c.json({ ok: true }))
-app.route('/api/v1', publica)
-app.route('/api/admin', admin)
+app.get('/', (c) => c.redirect('/panel/versions'))
+app.get('/health', (c) => c.json({ ok: true }))
+app.route('/api/v1', publicRoutes)
+app.route('/api/admin', adminRoutes)
 app.route('/panel', panel)
 
 app.onError((e, c) => {
@@ -33,28 +33,28 @@ app.onError((e, c) => {
   return c.json({ error: 'Error interno del servidor' }, 500)
 })
 
-async function crearAdminInicial(): Promise<void> {
-  const { usuario, clave } = config.adminInicial
+async function createInitialAdmin(): Promise<void> {
+  const { username, password } = config.initialAdmin
   if ((await admins().countDocuments()) > 0) return
-  if (!usuario || clave.length < 10) {
-    console.warn('No hay administradores. Defina ADMIN_USUARIO y ADMIN_CLAVE (mín. 10 caracteres) o use npm run crear-admin.')
+  if (!username || password.length < 10) {
+    console.warn('No hay administradores. Defina ADMIN_USER y ADMIN_PASSWORD (mín. 10 caracteres) o use npm run create-admin.')
     return
   }
-  await admins().insertOne({ usuario, claveHash: await hashClave(clave), creadoEn: new Date() })
-  console.log(`Administrador inicial "${usuario}" creado. Quite ADMIN_CLAVE de las variables de entorno.`)
+  await admins().insertOne({ username, passwordHash: await hashPassword(password), createdAt: new Date() })
+  console.log(`Administrador inicial "${username}" creado. Quite ADMIN_PASSWORD de las variables de entorno.`)
 }
 
-await conectar()
-await limpiarTemporales()
-await crearAdminInicial()
+await connect()
+await cleanTempFiles()
+await createInitialAdmin()
 
-const server = serve({ fetch: app.fetch, port: config.puerto }, (info) => {
+const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
   console.log(`UPK Server escuchando en el puerto ${info.port} (datos en ${config.dataDir})`)
 })
 
-for (const senal of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(senal, () => {
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => {
     server.close()
-    cerrar().finally(() => process.exit(0))
+    disconnect().finally(() => process.exit(0))
   })
 }

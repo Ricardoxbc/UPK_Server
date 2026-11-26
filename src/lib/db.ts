@@ -1,119 +1,127 @@
 import { MongoClient, type Collection, type Db, type ObjectId } from 'mongodb'
 import { config } from './config.js'
 
-export type EstadoVersion = 'borrador' | 'publicada' | 'retirada'
+export type VersionState = 'draft' | 'published' | 'retired'
 
-export interface Version {
+/**
+ * Una versión (un app.jar firmado) asignada a uno o varios clientes.
+ * Solo los clientes de clientIds pueden verla y descargarla.
+ */
+export interface AppVersion {
   _id?: ObjectId
-  numero: string
-  estado: EstadoVersion
-  obligatoria: boolean
-  notas: string
+  number: string
+  state: VersionState
+  mandatory: boolean
+  /** Marca la versión como "global" (versión general de la app): sirve para el historial. */
+  isGlobal: boolean
+  clientIds: string[]
+  notes: string
   sha256: string
-  firma: string
-  tamano: number
+  signature: string
+  size: number
   /** Ruta relativa a DATA_DIR. */
-  ruta: string
-  creadaEn: Date
-  creadaPor: string
-  publicadaEn: Date | null
+  path: string
+  createdAt: Date
+  createdBy: string
+  publishedAt: Date | null
 }
 
-export interface Cliente {
+export interface Client {
   _id?: ObjectId
-  clienteId: string
-  nombre: string
-  /** Si se define, el cliente recibe exactamente esta versión (si está publicada). */
-  versionFijada: string | null
-  activo: boolean
-  ultimaVersion: string | null
-  ultimoContacto: Date | null
-  ultimaIp: string | null
-  creadoEn: Date
+  clientId: string
+  name: string
+  /** Un cliente inactivo no recibe actualizaciones. */
+  active: boolean
+  lastVersion: string | null
+  lastSeenAt: Date | null
+  lastIp: string | null
+  createdAt: Date
 }
 
-export type ResultadoReporte = 'actualizado' | 'cancelado' | 'fallido' | 'revertido' | 'omitido' | 'pospuesto'
+export const REPORT_RESULTS = ['updated', 'cancelled', 'failed', 'reverted', 'skipped', 'postponed'] as const
+export type ReportResult = (typeof REPORT_RESULTS)[number]
 
-export interface Reporte {
+export interface Report {
   _id?: ObjectId
-  clienteId: string
-  equipo: string
-  versionAntes: string
-  versionDespues: string
-  resultado: ResultadoReporte
-  detalle: string
+  clientId: string
+  machine: string
+  fromVersion: string
+  toVersion: string
+  result: ReportResult
+  detail: string
   ip: string | null
-  fecha: Date
+  createdAt: Date
 }
 
 export interface Admin {
   _id?: ObjectId
-  usuario: string
-  claveHash: string
-  creadoEn: Date
+  username: string
+  passwordHash: string
+  createdAt: Date
 }
 
-export interface TokenApi {
+export interface ApiToken {
   _id?: ObjectId
-  nombre: string
+  name: string
   /** SHA-256 del token; el token en claro solo se muestra al crearlo. */
   hash: string
-  creadoEn: Date
-  creadoPor: string
-  revocado: boolean
-  ultimoUso: Date | null
+  createdAt: Date
+  createdBy: string
+  revoked: boolean
+  lastUsedAt: Date | null
 }
 
-export interface Auditoria {
+export interface AuditEntry {
   _id?: ObjectId
-  usuario: string
-  accion: string
-  detalle: string
-  fecha: Date
+  username: string
+  action: string
+  detail: string
+  createdAt: Date
 }
 
-let cliente: MongoClient | null = null
+let mongo: MongoClient | null = null
 let db: Db | null = null
 
-export async function conectar(): Promise<Db> {
+export async function connect(): Promise<Db> {
   if (db) return db
   // Pool pequeño: el servicio corre con poca memoria y poco tráfico
-  cliente = new MongoClient(config.mongoUrl, { maxPoolSize: 5, serverSelectionTimeoutMS: 8000 })
-  await cliente.connect()
-  db = cliente.db(config.mongoDb)
-  await crearIndices(db)
+  mongo = new MongoClient(config.mongoUrl, { maxPoolSize: 5, serverSelectionTimeoutMS: 8000 })
+  await mongo.connect()
+  db = mongo.db(config.mongoDb)
+  await createIndexes(db)
   return db
 }
 
-async function crearIndices(d: Db): Promise<void> {
-  await d.collection('versiones').createIndex({ numero: 1 }, { unique: true })
-  await d.collection('clientes').createIndex({ clienteId: 1 }, { unique: true })
-  await d.collection('reportes').createIndex({ clienteId: 1, fecha: -1 })
+async function createIndexes(d: Db): Promise<void> {
+  await d.collection('versions').createIndex({ clientIds: 1, state: 1 })
+  await d.collection('versions').createIndex({ number: 1 })
+  await d.collection('clients').createIndex({ clientId: 1 }, { unique: true })
+  await d.collection('reports').createIndex({ clientId: 1, createdAt: -1 })
   // Los reportes caducan solos a los 180 días
-  await d.collection('reportes').createIndex({ fecha: 1 }, { expireAfterSeconds: 180 * 24 * 3600 })
-  await d.collection('admins').createIndex({ usuario: 1 }, { unique: true })
-  await d.collection('tokens').createIndex({ hash: 1 }, { unique: true })
-  await d.collection('auditoria').createIndex({ fecha: -1 })
+  await d.collection('reports').createIndex({ createdAt: 1 }, { expireAfterSeconds: 180 * 24 * 3600 })
+  await d.collection('admins').createIndex({ username: 1 }, { unique: true })
+  await d.collection('apiTokens').createIndex({ hash: 1 }, { unique: true })
+  await d.collection('auditLog').createIndex({ createdAt: -1 })
 }
 
-function col<T extends object>(nombre: string): Collection<T> {
+function collection<T extends object>(name: string): Collection<T> {
   if (!db) throw new Error('Base de datos no conectada')
-  return db.collection<T>(nombre)
+  return db.collection<T>(name)
 }
 
-export const versiones = () => col<Version>('versiones')
-export const clientes = () => col<Cliente>('clientes')
-export const reportes = () => col<Reporte>('reportes')
-export const admins = () => col<Admin>('admins')
-export const tokens = () => col<TokenApi>('tokens')
-export const auditoria = () => col<Auditoria>('auditoria')
+export const versions = () => collection<AppVersion>('versions')
+export const clients = () => collection<Client>('clients')
+export const reports = () => collection<Report>('reports')
+export const admins = () => collection<Admin>('admins')
+export const apiTokens = () => collection<ApiToken>('apiTokens')
+export const auditLog = () => collection<AuditEntry>('auditLog')
 
-export async function auditar(usuario: string, accion: string, detalle = ''): Promise<void> {
-  await auditoria().insertOne({ usuario, accion, detalle, fecha: new Date() })
+export async function audit(username: string, action: string, detail = ''): Promise<void> {
+  await auditLog().insertOne({ username, action, detail, createdAt: new Date() })
 }
 
-export async function cerrar(): Promise<void> {
-  await cliente?.close()
-  cliente = null
+export async function disconnect(): Promise<void> {
+  await mongo?.close()
+  mongo = null
   db = null
 }

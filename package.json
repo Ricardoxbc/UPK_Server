@@ -11,7 +11,7 @@
     "dev": "tsx watch --env-file=.env src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node --max-old-space-size=96 dist/src/index.js",
-    "crear-admin": "node dist/scripts/crear-admin.js",
+    "create-admin": "node dist/scripts/createAdmin.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

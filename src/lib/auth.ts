@@ -2,58 +2,56 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { Context, MiddlewareHandler } from 'hono'
 import { deleteCookie, getSignedCookie, setSignedCookie } from 'hono/cookie'
 import bcrypt from 'bcryptjs'
-import { admins, tokens } from './db.js'
+import { admins, apiTokens } from './db.js'
 import { config } from './config.js'
 
-const COOKIE = 'upk_sesion'
-const DURACION_SESION_MS = 12 * 3600 * 1000
-const HASH_FICTICIO = bcrypt.hashSync(randomBytes(16).toString('hex'), 12)
+const SESSION_COOKIE = 'upk_session'
+const SESSION_MS = 12 * 3600 * 1000
+const DUMMY_HASH = bcrypt.hashSync(randomBytes(16).toString('hex'), 12)
 
-export type Variables = { usuario: string }
+export type AuthVariables = { username: string }
 
-export async function hashClave(clave: string): Promise<string> {
-  return bcrypt.hash(clave, 12)
+export async function hashPassword(password: string): Promise<string> {
+  return bcrypt.hash(password, 12)
 }
 
-export async function verificarCredenciales(usuario: string, clave: string): Promise<boolean> {
-  const a = await admins().findOne({ usuario })
-  // Se compara aunque no exista el usuario para no revelar cuáles existen por el tiempo de respuesta
-  const hash = a?.claveHash ?? HASH_FICTICIO
-  const ok = await bcrypt.compare(clave, hash)
-  return ok && !!a
+export async function checkCredentials(username: string, password: string): Promise<boolean> {
+  const admin = await admins().findOne({ username })
+  // Se compara aunque el usuario no exista para no revelar cuáles existen por el tiempo de respuesta
+  const ok = await bcrypt.compare(password, admin?.passwordHash ?? DUMMY_HASH)
+  return ok && !!admin
 }
 
-export async function iniciarSesion(c: Context, usuario: string): Promise<void> {
-  const valor = `${usuario}|${Date.now() + DURACION_SESION_MS}`
-  await setSignedCookie(c, COOKIE, valor, config.sessionSecret, {
+export async function startSession(c: Context, username: string): Promise<void> {
+  await setSignedCookie(c, SESSION_COOKIE, `${username}|${Date.now() + SESSION_MS}`, config.sessionSecret, {
     httpOnly: true,
-    secure: config.cookieSegura,
+    secure: config.secureCookie,
     sameSite: 'Strict',
     path: '/',
-    maxAge: DURACION_SESION_MS / 1000,
+    maxAge: SESSION_MS / 1000,
   })
 }
 
-export function cerrarSesion(c: Context): void {
-  deleteCookie(c, COOKIE, { path: '/' })
+export function endSession(c: Context): void {
+  deleteCookie(c, SESSION_COOKIE, { path: '/' })
 }
 
 /** Panel: exige sesión válida; si no, redirige al login. En POST exige además mismo origen. */
-export const requiereSesion: MiddlewareHandler<{ Variables: Variables }> = async (c, next) => {
-  const valor = await getSignedCookie(c, config.sessionSecret, COOKIE)
-  const [usuario, expira] = typeof valor === 'string' ? valor.split('|') : []
-  if (!usuario || !expira || Number(expira) < Date.now() || !(await admins().findOne({ usuario }))) {
+export const requireSession: MiddlewareHandler<{ Variables: AuthVariables }> = async (c, next) => {
+  const value = await getSignedCookie(c, config.sessionSecret, SESSION_COOKIE)
+  const [username, expires] = typeof value === 'string' ? value.split('|') : []
+  if (!username || !expires || Number(expires) < Date.now() || !(await admins().findOne({ username }))) {
     return c.redirect('/panel/login')
   }
-  if (c.req.method !== 'GET' && !mismoOrigen(c)) {
+  if (c.req.method !== 'GET' && !isSameOrigin(c)) {
     return c.text('Origen no permitido', 403)
   }
-  c.set('usuario', usuario)
+  c.set('username', username)
   await next()
 }
 
 /** Protección CSRF adicional a SameSite=Strict: el Origin (si viene) debe ser este mismo host. */
-export function mismoOrigen(c: Context): boolean {
+export function isSameOrigin(c: Context): boolean {
   const origin = c.req.header('origin')
   if (!origin) return true
   try {
@@ -68,21 +66,20 @@ export function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
 }
 
-export function generarToken(): string {
+export function generateToken(): string {
   return 'upk_' + randomBytes(24).toString('base64url')
 }
 
 /** API de administración: Authorization: Bearer <token>. */
-export const requiereToken: MiddlewareHandler<{ Variables: Variables }> = async (c, next) => {
-  const auth = c.req.header('authorization') ?? ''
-  const m = /^Bearer\s+(\S+)$/i.exec(auth)
-  if (!m) return c.json({ error: 'Falta el token (Authorization: Bearer …)' }, 401)
-  const h = hashToken(m[1])
-  const t = await tokens().findOne({ hash: h, revocado: false })
-  if (!t || !timingSafeEqual(Buffer.from(t.hash), Buffer.from(h))) {
+export const requireApiToken: MiddlewareHandler<{ Variables: AuthVariables }> = async (c, next) => {
+  const match = /^Bearer\s+(\S+)$/i.exec(c.req.header('authorization') ?? '')
+  if (!match) return c.json({ error: 'Falta el token (Authorization: Bearer …)' }, 401)
+  const hash = hashToken(match[1])
+  const token = await apiTokens().findOne({ hash, revoked: false })
+  if (!token || !timingSafeEqual(Buffer.from(token.hash), Buffer.from(hash))) {
     return c.json({ error: 'Token inválido o revocado' }, 401)
   }
-  await tokens().updateOne({ _id: t._id }, { $set: { ultimoUso: new Date() } })
-  c.set('usuario', `token:${t.nombre}`)
+  await apiTokens().updateOne({ _id: token._id }, { $set: { lastUsedAt: new Date() } })
+  c.set('username', `token:${token.name}`)
   await next()
 }

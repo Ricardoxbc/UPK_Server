@@ -19,5 +19,5 @@ RUN mkdir -p /data && chown node:node /data
 USER node
 VOLUME ["/data"]
 EXPOSE 3000
-HEALTHCHECK --interval=60s --timeout=5s CMD wget -qO- http://127.0.0.1:3000/salud || exit 1
+HEALTHCHECK --interval=60s --timeout=5s CMD wget -qO- http://127.0.0.1:3000/health || exit 1
 CMD ["node", "--max-old-space-size=96", "dist/src/index.js"]
