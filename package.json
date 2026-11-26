@@ -1,0 +1,30 @@
+{
+  "name": "upk-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Servidor de versiones y actualizaciones del sistema UPK (lo consulta UPK Launcher)",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch --env-file=.env src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node --max-old-space-size=96 dist/src/index.js",
+    "crear-admin": "node dist/scripts/crear-admin.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.11",
+    "bcryptjs": "^3.0.3",
+    "busboy": "^1.6.0",
+    "hono": "^4.13.22",
+    "mongodb": "^7.9.1"
+  },
+  "devDependencies": {
+    "@types/busboy": "^1.5.5",
+    "@types/node": "^26.6.11",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
