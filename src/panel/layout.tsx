@@ -22,6 +22,7 @@ form.grid>label{padding-top:6px;color:var(--mut)}.msg{padding:8px 12px;border-ra
 .tag.draft,.tag.postponed,.tag.skipped,.tag.unknown{background:var(--bg);color:var(--mut)}
 .tag.retired,.tag.failed,.tag.reverted,.tag.inactive{background:#ffebe9;color:var(--err);border-color:#ffcecb}
 .tag.mandatory,.tag.cancelled,.tag.custom{background:#fff8c5;color:var(--warn);border-color:#f2e085}
+.tag.running{background:#dafbe1;color:var(--ok);border-color:#aceebb}.tag.stopped,.tag.uninstalled{background:var(--bg);color:var(--mut)}
 .tag.global{background:#fbefff;color:var(--glb);border-color:#e6d2fb}
 .muted{color:var(--mut)}code{background:var(--bg);padding:1px 5px;border-radius:4px}pre{white-space:pre-wrap;margin:0}
 .actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center}.box{border:1px solid var(--bd);border-radius:8px;padding:14px;background:var(--bg)}
@@ -33,6 +34,7 @@ const MENU: [string, string][] = [
   ['/panel/versions', 'Versiones'],
   ['/panel/global', 'Historial global'],
   ['/panel/clients', 'Clientes'],
+  ['/panel/components', 'Sincronización'],
   ['/panel/reports', 'Reportes'],
   ['/panel/audit', 'Auditoría'],
   ['/panel/tokens', 'Tokens'],

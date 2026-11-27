@@ -52,7 +52,8 @@ export async function receiveMultipart(req: IncomingMessage): Promise<JarUpload>
       ;(upload.fields[name] ??= []).push(value)
     })
     parser.on('file', (name, stream, info) => {
-      if (name !== 'jar' || !info.filename) {
+      // "jar" para versiones de la app, "package" para paquetes de componentes (zip)
+      if ((name !== 'jar' && name !== 'package') || !info.filename) {
         stream.resume()
         return
       }
@@ -95,6 +96,15 @@ export function absolutePath(relativePath: string): string {
 /** Mueve el jar a versions/{id}/app.jar y devuelve la ruta relativa. */
 export async function storeVersionFile(tempPath: string, versionId: string): Promise<string> {
   const relativePath = join('versions', versionId, 'app.jar')
+  const target = absolutePath(relativePath)
+  await mkdir(dirname(target), { recursive: true })
+  await rename(tempPath, target)
+  return relativePath
+}
+
+/** Mueve el zip a components/{id}/package.zip y devuelve la ruta relativa. */
+export async function storeComponentFile(tempPath: string, packageId: string): Promise<string> {
+  const relativePath = join('components', packageId, 'package.zip')
   const target = absolutePath(relativePath)
   await mkdir(dirname(target), { recursive: true })
   await rename(tempPath, target)

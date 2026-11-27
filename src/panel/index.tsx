@@ -7,6 +7,7 @@ import { query, redirectWith, type PanelEnv } from './helpers.js'
 import { versionsPages } from './versionsPages.js'
 import { clientsPages } from './clientsPages.js'
 import { miscPages } from './miscPages.js'
+import { componentsPages } from './componentsPages.js'
 
 export const panel = new Hono<PanelEnv>()
 
@@ -70,4 +71,5 @@ panel.use('*', requireSession)
 panel.get('/', (c) => c.redirect('/panel/versions'))
 panel.route('/versions', versionsPages)
 panel.route('/clients', clientsPages)
+panel.route('/components', componentsPages)
 panel.route('/', miscPages)

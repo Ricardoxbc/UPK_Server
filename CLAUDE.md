@@ -28,6 +28,16 @@ minVersion, mandatory, message, newApiUrl`. El Launcher deriva `…/report` reem
 `update.api.url`. Multipart de `Firmador publicar`: `version, sha256, signature, notes, mandatory, isGlobal, publish,
 clientIds` (coma-separado) + `jar`.
 
+## Componentes (servicio de sincronización UPK Sync)
+`src/lib/components.ts` + `src/panel/componentsPages.tsx` (menú *Sincronización*). Paquetes zip firmados en
+`componentPackages` (`DATA_DIR/components/{id}/package.zip`); estado deseado por cliente en `clients.syncService`
+(`enabled`, `packageId` null = el más reciente, `env` con `UPK_MONGODB_URI/UPK_MONGODB_DB/UPK_WEBHOOK_URL/SYNC_CRON`,
+vínculo `keyHash/boundMachine`, último `status`); historial en `componentReports` (180 días). Rutas públicas
+`GET /api/v1/components`, `GET /api/v1/components/downloads/:id`, `POST /api/v1/components/report`: exigen
+`X-Client-Key`; el primer Launcher que consulta queda vinculado (los demás 403) porque la respuesta lleva la URI de
+MongoDB. Subida: `POST /api/admin/components` (multipart, archivo `package`) o `Firmador publicar-componente`.
+La auditoría nunca guarda la URI. Guía: `../UPK_Launcher/docs/SINCRONIZACION_REMOTA.md`.
+
 ## Probar en local
 Mongo temporal: `mongod --dbpath <tmp> --port 27099` (MongoDB 7 en `C:\Program Files\MongoDB`; el servicio de Windows
 está detenido, no tocarlo). Env en un archivo fuera del repo con `SECURE_COOKIE=false`;

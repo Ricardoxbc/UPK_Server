@@ -4,7 +4,11 @@ import { Hono, type Context } from 'hono'
 import { ObjectId } from 'mongodb'
 import { absolutePath, createReadStream } from '../lib/storage.js'
 import { config } from '../lib/config.js'
-import { clients, reports, versions, REPORT_RESULTS, type ReportResult } from '../lib/db.js'
+import {
+  clients, componentPackages, componentReports, reports, versions,
+  COMPONENT_STATES, REPORT_RESULTS, type Client, type ComponentState, type ReportResult,
+} from '../lib/db.js'
+import { checkClientKey, computeComponents, isValidClientKey, syncSettings } from '../lib/components.js'
 import { computeUpdate, touchClient } from '../lib/releases.js'
 import { isValidClientId } from '../lib/version.js'
 
@@ -50,35 +54,27 @@ publicRoutes.get('/update', async (c) => {
 })
 
 /**
- * Descarga del jar con soporte de Range (el Launcher reanuda descargas canceladas).
- * Solo para un cliente al que la versión está asignada: nadie descarga la versión de otro.
+ * Envía un archivo de DATA_DIR con soporte de Range (el Launcher reanuda descargas canceladas).
+ * Comprueba que existe y que su tamaño es el registrado.
  */
-publicRoutes.get('/downloads/:versionId', async (c) => {
-  const id = parseObjectId(c.req.param('versionId'))
-  const clientId = text(c.req.query('clientId'), 60)
-  const version = id && clientId
-    ? await versions().findOne({ _id: id, state: 'published', clientIds: clientId })
-    : null
-  if (!version) return c.json({ error: 'Versión no disponible para este cliente' }, 404)
-
-  const filePath = absolutePath(version.path)
+async function sendFile(c: Context, filePath: string, expectedSize: number, label: string,
+  contentType: string, fileName: string): Promise<Response> {
   let total: number
   try {
     total = (await stat(filePath)).size
   } catch (e) {
-    // Suele indicar que DATA_DIR no está en un volumen persistente y el redespliegue borró los jar
-    console.error(`[download] Falta el archivo de la versión ${version.number} (${version._id}) en ${filePath}:`,
-      e instanceof Error ? e.message : e)
-    return c.json({ error: `El archivo de la versión ${version.number} no está en el disco del servidor. Vuelva a subirla.` }, 500)
+    // Suele indicar que DATA_DIR no está en un volumen persistente y el redespliegue borró los archivos
+    console.error(`[download] Falta el archivo de ${label} en ${filePath}:`, e instanceof Error ? e.message : e)
+    return c.json({ error: `El archivo de ${label} no está en el disco del servidor. Vuelva a subirlo.` }, 500)
   }
-  if (total !== version.size) {
-    console.error(`[download] Tamaño distinto en ${filePath}: ${total} en disco, ${version.size} registrado`)
-    return c.json({ error: `El archivo de la versión ${version.number} en el servidor está dañado. Vuelva a subirla.` }, 500)
+  if (total !== expectedSize) {
+    console.error(`[download] Tamaño distinto en ${filePath}: ${total} en disco, ${expectedSize} registrado`)
+    return c.json({ error: `El archivo de ${label} en el servidor está dañado. Vuelva a subirlo.` }, 500)
   }
 
   const headers: Record<string, string> = {
-    'Content-Type': 'application/java-archive',
-    'Content-Disposition': `attachment; filename="app-${version.number}.jar"`,
+    'Content-Type': contentType,
+    'Content-Disposition': `attachment; filename="${fileName}"`,
     'Accept-Ranges': 'bytes',
     'Cache-Control': 'no-store',
   }
@@ -105,6 +101,22 @@ publicRoutes.get('/downloads/:versionId', async (c) => {
   headers['Content-Length'] = String(end - start + 1)
   const stream = Readable.toWeb(createReadStream(filePath, { start, end })) as ReadableStream
   return c.body(stream, status, headers)
+}
+
+/**
+ * Descarga del jar con soporte de Range (el Launcher reanuda descargas canceladas).
+ * Solo para un cliente al que la versión está asignada: nadie descarga la versión de otro.
+ */
+publicRoutes.get('/downloads/:versionId', async (c) => {
+  const id = parseObjectId(c.req.param('versionId'))
+  const clientId = text(c.req.query('clientId'), 60)
+  const version = id && clientId
+    ? await versions().findOne({ _id: id, state: 'published', clientIds: clientId })
+    : null
+  if (!version) return c.json({ error: 'Versión no disponible para este cliente' }, 404)
+
+  return sendFile(c, absolutePath(version.path), version.size, `la versión ${version.number}`,
+    'application/java-archive', `app-${version.number}.jar`)
 })
 
 /** Resultado de cada intento de actualización del Launcher. */
@@ -138,5 +150,79 @@ publicRoutes.post('/report', async (c) => {
   await clients().updateOne({ clientId }, {
     $set: { lastSeenAt: new Date(), lastIp: ip, ...(installed ? { lastVersion: installed } : {}) },
   })
+  return c.json({ ok: true })
+})
+
+// ---------- Componentes (servicio de sincronización) ----------
+// Solo los consulta el Launcher en modo servidor. Exigen la clave del Launcher (X-Client-Key):
+// el primer Launcher que consulta queda vinculado y los demás reciben 403.
+
+type KeyedClient = { client: Client } | { error: Response }
+
+async function authorizeComponents(c: Context, clientId: string, machine: string): Promise<KeyedClient> {
+  const key = text(c.req.header('x-client-key'), 200)
+  if (!isValidClientId(clientId) || !isValidClientKey(key)) {
+    return { error: c.json({ error: 'Parámetros requeridos: clientId válido y cabecera X-Client-Key' }, 400) }
+  }
+  const client = await clients().findOne({ clientId })
+  if (!client) return { error: c.json({ error: 'Cliente no registrado' }, 404) }
+  const check = await checkClientKey(client, key, machine)
+  if (check === 'mismatch') {
+    console.warn(`[components] Clave rechazada para ${clientId} desde ${machine || '?'} (${clientIp(c) ?? '?'})`)
+    return { error: c.json({ error: 'Este equipo no es el vinculado al cliente. Reinicie el vínculo en el panel.' }, 403) }
+  }
+  return { client: (await clients().findOne({ clientId }))! }
+}
+
+/** Estado deseado de los componentes: GET /api/v1/components?clientId=ID&machine=PC (X-Client-Key). */
+publicRoutes.get('/components', async (c) => {
+  const clientId = text(c.req.query('clientId'), 60)
+  const auth = await authorizeComponents(c, clientId, text(c.req.query('machine'), 100))
+  if ('error' in auth) return auth.error
+  const base = publicBaseUrl(c)
+  const response = await computeComponents(auth.client,
+    (p) => `${base}/api/v1/components/downloads/${p._id!.toHexString()}?clientId=${encodeURIComponent(clientId)}`)
+  c.header('Cache-Control', 'no-store')
+  return c.json(response)
+})
+
+/** Descarga del paquete: solo para el Launcher vinculado de un cliente con el servicio activado. */
+publicRoutes.get('/components/downloads/:packageId', async (c) => {
+  const clientId = text(c.req.query('clientId'), 60)
+  const auth = await authorizeComponents(c, clientId, '')
+  if ('error' in auth) return auth.error
+  const id = parseObjectId(c.req.param('packageId'))
+  const pkg = id && auth.client.active && syncSettings(auth.client).enabled
+    ? await componentPackages().findOne({ _id: id })
+    : null
+  if (!pkg) return c.json({ error: 'Paquete no disponible para este cliente' }, 404)
+  return sendFile(c, absolutePath(pkg.path), pkg.size, `${pkg.component} ${pkg.number}`,
+    'application/zip', `${pkg.component}-${pkg.number}.zip`)
+})
+
+/** Estado del componente tras cada revisión del Launcher. */
+publicRoutes.post('/components/report', async (c) => {
+  let body: Record<string, unknown>
+  try {
+    const raw = await c.req.text()
+    if (raw.length > 16 * 1024) return c.json({ error: 'Reporte demasiado grande' }, 413)
+    body = JSON.parse(raw)
+  } catch {
+    return c.json({ error: 'JSON inválido' }, 400)
+  }
+  const clientId = text(body.clientId, 60)
+  const machine = text(body.machine, 100)
+  const auth = await authorizeComponents(c, clientId, machine)
+  if ('error' in auth) return auth.error
+  const state = text(body.state, 20) as ComponentState
+  if (text(body.component, 40) !== 'syncService' || !COMPONENT_STATES.includes(state)) {
+    return c.json({ error: `Campos requeridos: component=syncService y state (${COMPONENT_STATES.join('/')})` }, 400)
+  }
+  const status = { state, version: text(body.version, 40), machine, detail: text(body.detail, 1000), reportedAt: new Date() }
+  await componentReports().insertOne({
+    clientId, component: 'syncService', machine, state, version: status.version, detail: status.detail,
+    ip: clientIp(c), createdAt: status.reportedAt,
+  })
+  await clients().updateOne({ clientId }, { $set: { 'syncService.status': status } })
   return c.json({ ok: true })
 })

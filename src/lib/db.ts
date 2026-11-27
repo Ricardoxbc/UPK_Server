@@ -36,6 +36,58 @@ export interface Client {
   lastSeenAt: Date | null
   lastIp: string | null
   createdAt: Date
+  /** Servicio de sincronización (UPK Sync) que el Launcher del equipo servidor instala o desinstala. */
+  syncService?: SyncServiceSettings
+}
+
+/** Componentes que el Launcher sabe instalar (paquetes .zip firmados). */
+export const COMPONENT_NAMES = ['syncService'] as const
+export type ComponentName = (typeof COMPONENT_NAMES)[number]
+
+/** Paquete subido de un componente (zip firmado con la misma clave que los jar). */
+export interface ComponentPackage {
+  _id?: ObjectId
+  component: ComponentName
+  number: string
+  notes: string
+  sha256: string
+  signature: string
+  size: number
+  /** Ruta relativa a DATA_DIR. */
+  path: string
+  createdAt: Date
+  createdBy: string
+}
+
+/** Variables de entorno que el Launcher escribe en el .env del servicio de sincronización. */
+export const SYNC_ENV_KEYS = ['UPK_MONGODB_URI', 'UPK_MONGODB_DB', 'UPK_WEBHOOK_URL', 'SYNC_CRON'] as const
+export type SyncEnvKey = (typeof SYNC_ENV_KEYS)[number]
+
+export const COMPONENT_STATES = ['running', 'stopped', 'uninstalled', 'failed'] as const
+export type ComponentState = (typeof COMPONENT_STATES)[number]
+
+/**
+ * Estado deseado del servicio de sincronización de un cliente (lo decide el panel) y último estado
+ * reportado por el Launcher. Solo lo aplica el Launcher en modo servidor que esté vinculado.
+ */
+export interface SyncServiceSettings {
+  enabled: boolean
+  /** Paquete a instalar; null = el más reciente subido. */
+  packageId: ObjectId | null
+  env: Partial<Record<SyncEnvKey, string>>
+  /** SHA-256 de la clave del Launcher vinculado (se fija en su primer contacto). */
+  keyHash: string | null
+  boundMachine: string | null
+  boundAt: Date | null
+  status: ComponentStatus | null
+}
+
+export interface ComponentStatus {
+  state: ComponentState
+  version: string
+  machine: string
+  detail: string
+  reportedAt: Date
 }
 
 export const REPORT_RESULTS = ['updated', 'cancelled', 'failed', 'reverted', 'skipped', 'postponed'] as const
@@ -48,6 +100,18 @@ export interface Report {
   fromVersion: string
   toVersion: string
   result: ReportResult
+  detail: string
+  ip: string | null
+  createdAt: Date
+}
+
+export interface ComponentReport {
+  _id?: ObjectId
+  clientId: string
+  component: ComponentName
+  machine: string
+  state: ComponentState
+  version: string
   detail: string
   ip: string | null
   createdAt: Date
@@ -99,6 +163,9 @@ async function createIndexes(d: Db): Promise<void> {
   await d.collection('reports').createIndex({ clientId: 1, createdAt: -1 })
   // Los reportes caducan solos a los 180 días
   await d.collection('reports').createIndex({ createdAt: 1 }, { expireAfterSeconds: 180 * 24 * 3600 })
+  await d.collection('componentPackages').createIndex({ component: 1, number: 1 }, { unique: true })
+  await d.collection('componentReports').createIndex({ clientId: 1, createdAt: -1 })
+  await d.collection('componentReports').createIndex({ createdAt: 1 }, { expireAfterSeconds: 180 * 24 * 3600 })
   await d.collection('admins').createIndex({ username: 1 }, { unique: true })
   await d.collection('apiTokens').createIndex({ hash: 1 }, { unique: true })
   await d.collection('auditLog').createIndex({ createdAt: -1 })
@@ -112,6 +179,8 @@ function collection<T extends object>(name: string): Collection<T> {
 export const versions = () => collection<AppVersion>('versions')
 export const clients = () => collection<Client>('clients')
 export const reports = () => collection<Report>('reports')
+export const componentPackages = () => collection<ComponentPackage>('componentPackages')
+export const componentReports = () => collection<ComponentReport>('componentReports')
 export const admins = () => collection<Admin>('admins')
 export const apiTokens = () => collection<ApiToken>('apiTokens')
 export const auditLog = () => collection<AuditEntry>('auditLog')
