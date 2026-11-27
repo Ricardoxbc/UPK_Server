@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { Hono } from 'hono'
 import { ObjectId } from 'mongodb'
 import {
@@ -60,6 +61,7 @@ componentsPages.get('/', async (c) => {
                 <td>{s.enabled ? <span>activado <span class="muted">({wanted ?? 'sin paquete'}{s.packageId ? '' : ', la más reciente'})</span></span>
                   : <span class="muted">desactivado</span>}</td>
                 <td><StateTag state={s.status?.state} /> {s.status?.version}
+                  {s.resetId && <span class="tag mandatory">reinicio pendiente</span>}
                   <div class="muted">{s.status ? formatDate(s.status.reportedAt) : ''}</div></td>
                 <td>{s.boundMachine ?? <span class="muted">—</span>}</td>
                 <td><a href={`/panel/components/clients/${encodeURIComponent(cl.clientId)}`}>Configurar</a></td>
@@ -190,6 +192,28 @@ componentsPages.get('/clients/:clientId', async (c) => {
       </div>
       <p class="muted">Reinicie el vínculo si reinstaló el equipo servidor o cambió de PC.</p>
 
+      <h2>Estado de la sincronización</h2>
+      <div class="box actions" style="justify-content:space-between">
+        <div>{s.resetId
+          ? <span><span class="tag mandatory">reinicio pendiente</span> <span class="muted">pedido {formatDate(s.resetRequestedAt)}.
+              Se aplicará en el próximo inicio del sistema en el equipo servidor.</span></span>
+          : <span class="muted">{s.resetDoneAt ? `Último reinicio aplicado: ${formatDate(s.resetDoneAt)}` : 'Sin reinicios.'}</span>}</div>
+        {s.resetId
+          ? (
+            <form method="post" action={`${base}/reset/cancel`}>
+              <button>Cancelar reinicio</button>
+            </form>
+          )
+          : (
+            <form method="post" action={`${base}/reset`}
+              onsubmit="return confirm('En el próximo inicio se borrará sync_state.db y el servicio volverá a enviar todo el catálogo a MongoDB. ¿Continuar?')">
+              <button class="danger">Reiniciar estado</button>
+            </form>
+          )}
+      </div>
+      <p class="muted">Borra <code>sync_state.db</code>, <code>-wal</code> y <code>-shm</code> en el equipo servidor: el servicio
+        olvida lo que ya envió y vuelve a sincronizar todo. Úselo si MongoDB quedó desalineado o se vació.</p>
+
       <h2>Reportes del Launcher</h2>
       <table>
         <thead><tr><th>Fecha</th><th>Equipo</th><th>Estado</th><th>Versión</th><th>Detalle</th></tr></thead>
@@ -230,6 +254,30 @@ componentsPages.post('/clients/:clientId', async (c) => {
   return redirectWith(c, base, 'ok', enabled
     ? 'Guardado. El Launcher del equipo servidor lo instalará o actualizará en su próximo inicio.'
     : 'Guardado. El Launcher del equipo servidor lo desinstalará en su próximo inicio.')
+})
+
+componentsPages.post('/clients/:clientId/reset', async (c) => {
+  const clientId = c.req.param('clientId')
+  const base = `/panel/components/clients/${encodeURIComponent(clientId)}`
+  const cl = await clients().findOne({ clientId })
+  if (!cl) return redirectWith(c, '/panel/components', 'error', 'Cliente no encontrado')
+  // Se guarda el objeto completo: el cliente puede no tener syncService todavía
+  const s = syncSettings(cl)
+  await clients().updateOne({ clientId },
+    { $set: { syncService: { ...s, resetId: randomBytes(8).toString('hex'), resetRequestedAt: new Date() } } })
+  await audit(c.get('username'), 'component.reset', clientId)
+  return redirectWith(c, base, 'ok', s.enabled
+    ? 'Reinicio pedido. Se aplicará en el próximo inicio del sistema en el equipo servidor.'
+    : 'Reinicio pedido, pero el servicio está desactivado: se aplicará cuando lo active.')
+})
+
+componentsPages.post('/clients/:clientId/reset/cancel', async (c) => {
+  const clientId = c.req.param('clientId')
+  const base = `/panel/components/clients/${encodeURIComponent(clientId)}`
+  const result = await clients().updateOne({ clientId }, { $set: { 'syncService.resetId': null, 'syncService.resetRequestedAt': null } })
+  if (!result.matchedCount) return redirectWith(c, '/panel/components', 'error', 'Cliente no encontrado')
+  await audit(c.get('username'), 'component.reset.cancel', clientId)
+  return redirectWith(c, base, 'ok', 'Reinicio cancelado.')
 })
 
 componentsPages.post('/clients/:clientId/unbind', async (c) => {

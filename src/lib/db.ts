@@ -80,6 +80,13 @@ export interface SyncServiceSettings {
   boundMachine: string | null
   boundAt: Date | null
   status: ComponentStatus | null
+  /**
+   * Reinicio del estado de sincronización pedido desde el panel: mientras no sea null, el Launcher
+   * borra sync_state.db (y sus -wal/-shm) en su próximo inicio y lo confirma en el reporte.
+   */
+  resetId: string | null
+  resetRequestedAt: Date | null
+  resetDoneAt: Date | null
 }
 
 export interface ComponentStatus {
@@ -113,6 +120,23 @@ export interface ComponentReport {
   state: ComponentState
   version: string
   detail: string
+  ip: string | null
+  createdAt: Date
+}
+
+/** Resultado de la identificación de un Launcher que perdió su launcher.properties. */
+export const IDENTIFY_RESULTS = ['ok', 'unknown_client', 'inactive', 'version_mismatch', 'blocked'] as const
+export type IdentifyResult = (typeof IDENTIFY_RESULTS)[number]
+
+/** Cada intento de identificación (aciertos y fallos): así se ve quién escribe un cliente.id ajeno. */
+export interface Identification {
+  _id?: ObjectId
+  clientId: string
+  version: string
+  machine: string
+  /** El equipo ya tenía app.jar (solo perdió launcher.properties). */
+  hasApp: boolean
+  result: IdentifyResult
   ip: string | null
   createdAt: Date
 }
@@ -166,6 +190,8 @@ async function createIndexes(d: Db): Promise<void> {
   await d.collection('componentPackages').createIndex({ component: 1, number: 1 }, { unique: true })
   await d.collection('componentReports').createIndex({ clientId: 1, createdAt: -1 })
   await d.collection('componentReports').createIndex({ createdAt: 1 }, { expireAfterSeconds: 180 * 24 * 3600 })
+  await d.collection('identifications').createIndex({ createdAt: -1 })
+  await d.collection('identifications').createIndex({ createdAt: 1 }, { expireAfterSeconds: 365 * 24 * 3600 })
   await d.collection('admins').createIndex({ username: 1 }, { unique: true })
   await d.collection('apiTokens').createIndex({ hash: 1 }, { unique: true })
   await d.collection('auditLog').createIndex({ createdAt: -1 })
@@ -181,6 +207,7 @@ export const clients = () => collection<Client>('clients')
 export const reports = () => collection<Report>('reports')
 export const componentPackages = () => collection<ComponentPackage>('componentPackages')
 export const componentReports = () => collection<ComponentReport>('componentReports')
+export const identifications = () => collection<Identification>('identifications')
 export const admins = () => collection<Admin>('admins')
 export const apiTokens = () => collection<ApiToken>('apiTokens')
 export const auditLog = () => collection<AuditEntry>('auditLog')

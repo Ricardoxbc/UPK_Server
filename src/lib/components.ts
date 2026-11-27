@@ -60,7 +60,10 @@ export async function registerComponentPackage(upload: JarUpload, username: stri
 }
 
 export function emptySyncSettings(): SyncServiceSettings {
-  return { enabled: false, packageId: null, env: {}, keyHash: null, boundMachine: null, boundAt: null, status: null }
+  return {
+    enabled: false, packageId: null, env: {}, keyHash: null, boundMachine: null, boundAt: null, status: null,
+    resetId: null, resetRequestedAt: null, resetDoneAt: null,
+  }
 }
 
 export function syncSettings(client: Client): SyncServiceSettings {
@@ -139,6 +142,8 @@ export interface ComponentsResponse {
     env?: Partial<Record<SyncEnvKey, string>>
     /** Motivo por el que no se instala aunque esté activado (p. ej. no hay paquete subido). */
     message?: string
+    /** Reinicio pendiente: el Launcher borra sync_state.db una vez por cada resetId distinto. */
+    resetId?: string
   }
 }
 
@@ -150,9 +155,10 @@ export async function computeComponents(
   const base = { clientId: client.clientId }
   if (!client.active || !settings.enabled) return { ...base, syncService: { enabled: false } }
   const pkg = await targetPackage(settings)
+  const reset = settings.resetId ? { resetId: settings.resetId } : {}
   if (!pkg) {
     // Activado pero sin paquete: el Launcher no toca lo instalado (no desinstala por error)
-    return { ...base, syncService: { enabled: true, message: 'No hay paquete del servicio de sincronización subido' } }
+    return { ...base, syncService: { enabled: true, message: 'No hay paquete del servicio de sincronización subido', ...reset } }
   }
   return {
     ...base,
@@ -164,6 +170,7 @@ export async function computeComponents(
       signature: pkg.signature,
       size: pkg.size,
       env: settings.env,
+      ...reset,
     },
   }
 }

@@ -5,12 +5,12 @@ import { ObjectId } from 'mongodb'
 import { absolutePath, createReadStream } from '../lib/storage.js'
 import { config } from '../lib/config.js'
 import {
-  clients, componentPackages, componentReports, reports, versions,
-  COMPONENT_STATES, REPORT_RESULTS, type Client, type ComponentState, type ReportResult,
+  audit, clients, componentPackages, componentReports, identifications, reports, versions,
+  COMPONENT_STATES, REPORT_RESULTS, type Client, type ComponentState, type IdentifyResult, type ReportResult,
 } from '../lib/db.js'
 import { checkClientKey, computeComponents, isValidClientKey, syncSettings } from '../lib/components.js'
 import { computeUpdate, touchClient } from '../lib/releases.js'
-import { isValidClientId } from '../lib/version.js'
+import { compareVersions, isValidClientId, maxVersion } from '../lib/version.js'
 
 export function clientIp(c: Context): string | null {
   const forwarded = c.req.header('x-forwarded-for')
@@ -51,6 +51,81 @@ publicRoutes.get('/update', async (c) => {
   if (config.newApiUrl) response.newApiUrl = config.newApiUrl
   c.header('Cache-Control', 'no-store')
   return c.json(response)
+})
+
+// ---------- Identificación (launcher.properties perdido o equipo nuevo) ----------
+// El usuario escribe cliente.id y versión: se acepta solo si el cliente existe, está activo y la
+// versión es exactamente la última publicada para él (la que le indica soporte). Cada intento queda
+// registrado y se ve en el panel (Clientes → Identificaciones). Tras 5 fallos, la IP espera 15 minutos.
+const identifyFailures = new Map<string, { count: number; since: number }>()
+const IDENTIFY_WINDOW_MS = 15 * 60 * 1000
+const IDENTIFY_MAX_FAILURES = 5
+
+function identifyBlocked(ip: string): boolean {
+  const f = identifyFailures.get(ip)
+  return !!f && Date.now() - f.since <= IDENTIFY_WINDOW_MS && f.count >= IDENTIFY_MAX_FAILURES
+}
+
+function identifyFailed(ip: string): void {
+  const f = identifyFailures.get(ip)
+  if (!f || Date.now() - f.since > IDENTIFY_WINDOW_MS) identifyFailures.set(ip, { count: 1, since: Date.now() })
+  else f.count++
+  if (identifyFailures.size > 5000) identifyFailures.clear()
+}
+
+/** Versión que debe escribir el usuario: la mayor publicada para el cliente; sin ninguna, la última que reportó. */
+export async function expectedVersion(client: Client): Promise<string | null> {
+  const published = await versions().find({ state: 'published', clientIds: client.clientId }, { projection: { number: 1 } }).toArray()
+  return maxVersion(published, (v) => v.number)?.number ?? client.lastVersion ?? null
+}
+
+/** POST /api/v1/identify {clientId, version, machine, hasApp}. No crea clientes. */
+publicRoutes.post('/identify', async (c) => {
+  let body: Record<string, unknown>
+  try {
+    const raw = await c.req.text()
+    if (raw.length > 4 * 1024) return c.json({ error: 'Solicitud demasiado grande' }, 413)
+    body = JSON.parse(raw)
+  } catch {
+    return c.json({ error: 'JSON inválido' }, 400)
+  }
+  const clientId = text(body.clientId, 60)
+  const version = text(body.version, 40)
+  const machine = text(body.machine, 100)
+  const hasApp = body.hasApp === true
+  if (!isValidClientId(clientId) || !version) {
+    return c.json({ error: 'Escriba el ID del cliente y la versión' }, 400)
+  }
+  const ip = clientIp(c)
+  const record = async (result: IdentifyResult) => {
+    await identifications().insertOne({ clientId, version, machine, hasApp, result, ip, createdAt: new Date() })
+    if (result !== 'ok') {
+      console.warn(`[identify] ${result}: ${clientId} v${version} desde ${machine || '?'} (${ip ?? '?'})`)
+    }
+  }
+
+  if (identifyBlocked(ip ?? '?')) {
+    await record('blocked')
+    return c.json({ error: 'Demasiados intentos fallidos. Espere 15 minutos y vuelva a intentar.' }, 429)
+  }
+  const client = await clients().findOne({ clientId })
+  let result: IdentifyResult = 'ok'
+  if (!client) result = 'unknown_client'
+  else if (!client.active) result = 'inactive'
+  else {
+    const expected = await expectedVersion(client)
+    if (!expected || compareVersions(expected, version) !== 0) result = 'version_mismatch'
+  }
+  await record(result)
+  if (result !== 'ok') {
+    identifyFailed(ip ?? '?')
+    // Mismo mensaje para ID y versión: no revela si el cliente existe
+    return c.json({ error: 'El ID del cliente o la versión no son correctos. Consulte a soporte.' }, 403)
+  }
+  identifyFailures.delete(ip ?? '?')
+  await clients().updateOne({ clientId }, { $set: { lastSeenAt: new Date(), lastIp: ip } })
+  await audit('launcher', 'client.identify', `${clientId} v${version} → ${machine || '?'}${hasApp ? '' : ' (sin app.jar)'}`)
+  return c.json({ ok: true, clientId, version })
 })
 
 /**
@@ -224,5 +299,11 @@ publicRoutes.post('/components/report', async (c) => {
     ip: clientIp(c), createdAt: status.reportedAt,
   })
   await clients().updateOne({ clientId }, { $set: { 'syncService.status': status } })
+  // Reinicio del estado confirmado: solo si es el mismo que está pendiente (no uno pedido después)
+  const resetId = text(body.resetId, 40)
+  if (resetId) {
+    await clients().updateOne({ clientId, 'syncService.resetId': resetId },
+      { $set: { 'syncService.resetId': null, 'syncService.resetDoneAt': new Date() } })
+  }
   return c.json({ ok: true })
 })

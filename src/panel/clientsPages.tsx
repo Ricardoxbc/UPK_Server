@@ -1,11 +1,19 @@
 import { Hono } from 'hono'
-import { audit, clients, versions } from '../lib/db.js'
+import { audit, clients, identifications, versions, type IdentifyResult } from '../lib/db.js'
 import { clientVersionKinds } from '../lib/releases.js'
 import { compareVersions, isValidClientId } from '../lib/version.js'
 import { KindTag, Layout, formatDate } from './layout.js'
 import { query, redirectWith, type PanelEnv } from './helpers.js'
 
 export const clientsPages = new Hono<PanelEnv>()
+
+const IDENTIFY_LABEL: Record<IdentifyResult, [string, string]> = {
+  ok: ['aceptado', 'updated'],
+  unknown_client: ['ID inexistente', 'failed'],
+  inactive: ['cliente inactivo', 'failed'],
+  version_mismatch: ['versión incorrecta', 'failed'],
+  blocked: ['bloqueado (intentos)', 'failed'],
+}
 
 clientsPages.get('/', async (c) => {
   const list = await clients().find().sort({ clientId: 1 }).toArray()
@@ -19,6 +27,9 @@ clientsPages.get('/', async (c) => {
       if (!current || compareVersions(v.number, current) > 0) offered.set(id, v.number)
     }
   }
+  const idents = await identifications().find().sort({ createdAt: -1 }).limit(30).toArray()
+  const weekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000)
+  const rejected = idents.filter((i) => i.result !== 'ok' && i.createdAt >= weekAgo).length
   return c.html(
     <Layout title="Clientes" username={c.get('username')} active="/panel/clients" ok={query(c, 'ok')} error={query(c, 'error')}>
       <h1>Clientes</h1>
@@ -49,6 +60,28 @@ clientsPages.get('/', async (c) => {
               </tr>
             )
           })}
+        </tbody>
+      </table>
+
+      <h2 id="identificaciones">Identificaciones</h2>
+      <p class="muted">Cuando un equipo no tiene <code>launcher.properties</code> (instalación copiada o archivo borrado), el Launcher
+        pide el ID del cliente y la versión. Se acepta solo si el cliente existe, está activo y la versión es exactamente la
+        columna <b>Disponible</b> (sin versiones publicadas: la <b>Instalada</b>). Revise los rechazos: alguien escribió un ID
+        ajeno o equivocado.</p>
+      {rejected > 0 && <div class="msg err">{rejected} identificación(es) rechazada(s) en los últimos 7 días.</div>}
+      <table>
+        <thead><tr><th>Fecha</th><th>ID escrito</th><th>Versión escrita</th><th>Equipo</th><th>Resultado</th></tr></thead>
+        <tbody>
+          {idents.length === 0 && <tr><td colspan={5} class="muted">Sin identificaciones.</td></tr>}
+          {idents.map((i) => (
+            <tr>
+              <td>{formatDate(i.createdAt)}</td>
+              <td><b>{i.clientId}</b></td>
+              <td>{i.version}</td>
+              <td>{i.machine || '—'}<div class="muted">{i.ip ?? ''}{i.hasApp ? '' : ' · sin app.jar'}</div></td>
+              <td><span class={`tag ${IDENTIFY_LABEL[i.result][1]}`}>{IDENTIFY_LABEL[i.result][0]}</span></td>
+            </tr>
+          ))}
         </tbody>
       </table>
 

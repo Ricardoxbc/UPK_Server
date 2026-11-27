@@ -37,6 +37,14 @@ vínculo `keyHash/boundMachine`, último `status`); historial en `componentRepor
 `X-Client-Key`; el primer Launcher que consulta queda vinculado (los demás 403) porque la respuesta lleva la URI de
 MongoDB. Subida: `POST /api/admin/components` (multipart, archivo `package`) o `Firmador publicar-componente`.
 La auditoría nunca guarda la URI. Guía: `../UPK_Launcher/docs/SINCRONIZACION_REMOTA.md`.
+Reinicio del estado: el panel fija `syncService.resetId` (aleatorio); `/components` lo envía como `resetId` y el
+reporte que trae el mismo `resetId` lo limpia (`resetDoneAt`).
+
+## Identificación (launcher.properties perdido)
+`POST /api/v1/identify {clientId, version, machine, hasApp}` (en `routes/public.ts`): **no crea clientes**
+(a diferencia de `/update`). Acepta solo cliente existente + activo + versión = mayor publicada para él
+(`expectedVersion`; sin publicadas, `lastVersion`). Mismo 403 para ID y versión (no revela si el ID existe); 5 fallos
+por IP → 429 durante 15 min (en memoria). Cada intento va a `identifications` (365 días) y se ve en *Clientes*.
 
 ## Probar en local
 Mongo temporal: `mongod --dbpath <tmp> --port 27099` (MongoDB 7 en `C:\Program Files\MongoDB`; el servicio de Windows
