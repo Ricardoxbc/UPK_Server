@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { audit, clients, versions } from '../lib/db.js'
-import { MAX_JAR_BYTES, deleteVersionFile, receiveMultipart, UploadError } from '../lib/storage.js'
+import { MAX_JAR_BYTES, deleteVersionFile, fileStatus, receiveMultipart, UploadError, type FileStatus } from '../lib/storage.js'
 import {
   clientVersionKinds, parseClientIds, registerVersion, validateTargets, ValidationError,
 } from '../lib/releases.js'
@@ -12,6 +12,12 @@ export const versionsPages = new Hono<PanelEnv>()
 
 const STATE_LABEL = { draft: 'borrador', published: 'publicada', retired: 'retirada' } as const
 
+/** Aviso cuando el jar no está en disco (p. ej. DATA_DIR sin volumen persistente tras un redespliegue). */
+function FileProblem(props: { status: FileStatus }) {
+  if (props.status === 'ok') return null
+  return <span class="tag failed">{props.status === 'missing' ? 'archivo faltante' : 'archivo dañado'}</span>
+}
+
 async function allClients() {
   const list = await clients().find().sort({ clientId: 1 }).toArray()
   return { list, kinds: await clientVersionKinds(list) }
@@ -22,6 +28,7 @@ versionsPages.get('/', async (c) => {
   const clientFilter = query(c, 'clientId')
   const list = (await versions().find(clientFilter ? { clientIds: clientFilter } : {}).toArray())
     .sort((a, b) => compareVersions(b.number, a.number) || b.createdAt.getTime() - a.createdAt.getTime())
+  const statuses = new Map(await Promise.all(list.map(async (v) => [String(v._id), await fileStatus(v.path, v.size)] as const)))
   const clientIds = (await clients().find({}, { projection: { clientId: 1 } }).sort({ clientId: 1 }).toArray()).map((x) => x.clientId)
   return c.html(
     <Layout title="Versiones" username={c.get('username')} active="/panel/versions" ok={query(c, 'ok')} error={query(c, 'error')}>
@@ -44,6 +51,7 @@ versionsPages.get('/', async (c) => {
             <tr>
               <td>
                 <b>{v.number}</b> {v.isGlobal && <span class="tag global">global</span>}
+                <FileProblem status={statuses.get(String(v._id)) ?? 'ok'} />
                 {v.mandatory && <span class="tag mandatory">obligatoria</span>}
                 <div class="muted">{v.notes.split('\n')[0].slice(0, 60)}</div>
               </td>
@@ -69,7 +77,7 @@ versionsPages.get('/new', async (c) => {
     <Layout title="Subir versión" username={c.get('username')} active="/panel/versions" error={query(c, 'error')}>
       <h1>Subir versión</h1>
       <p class="muted">Lo normal es publicar desde la PC de desarrollo con <code>Firmador publicar</code>. Desde aquí:
-        obtenga la firma con <code>java -cp Launcher.jar com.upksoft.launcher.tools.Firmador firmar app.jar private_key.b64</code>
+        el nombre del archivo no importa (se guarda como app.jar). Obtenga la firma con <code>java -cp Launcher.jar com.upksoft.launcher.tools.Firmador firmar app.jar private_key.b64</code>
         (imprime <code>sha256</code> y <code>firma</code>).</p>
       <form class="grid box" method="post" action="/panel/versions/new" enctype="multipart/form-data" data-confirm-clients>
         <label>Versión</label><input name="version" placeholder="1.5.0" required pattern="\d+(\.\d+){1,3}" />
@@ -106,6 +114,7 @@ versionsPages.get('/:id', async (c) => {
   const id = toObjectId(c.req.param('id'))
   const v = id ? await versions().findOne({ _id: id }) : null
   if (!v) return redirectWith(c, '/panel/versions', 'error', 'Versión no encontrada')
+  const status = await fileStatus(v.path, v.size)
   const { list, kinds } = await allClients()
   const base = `/panel/versions/${v._id}`
   return c.html(
@@ -113,6 +122,11 @@ versionsPages.get('/:id', async (c) => {
       <p><a href="/panel/versions">← Versiones</a></p>
       <h1>Versión {v.number} <span class={`tag ${v.state}`}>{STATE_LABEL[v.state]}</span>
         {v.isGlobal && <span class="tag global">global</span>}{v.mandatory && <span class="tag mandatory">obligatoria</span>}</h1>
+      {status !== 'ok' && (
+        <div class="msg err">El archivo de esta versión {status === 'missing' ? 'no está' : 'está dañado'} en el disco del
+          servidor: los clientes reciben error 500 al descargarla. Suele pasar si <code>DATA_DIR</code> no está en un volumen
+          persistente y se redesplegó. Retírela y vuelva a subirla.</div>
+      )}
       <p class="muted">{formatSize(v.size)} · SHA-256 <code>{v.sha256}</code><br />
         Subida {formatDate(v.createdAt)} por {v.createdBy} · Publicada {formatDate(v.publishedAt)}</p>
 

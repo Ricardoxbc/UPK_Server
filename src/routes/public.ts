@@ -65,8 +65,15 @@ publicRoutes.get('/downloads/:versionId', async (c) => {
   let total: number
   try {
     total = (await stat(filePath)).size
-  } catch {
-    return c.json({ error: 'Archivo no encontrado en el servidor' }, 500)
+  } catch (e) {
+    // Suele indicar que DATA_DIR no está en un volumen persistente y el redespliegue borró los jar
+    console.error(`[download] Falta el archivo de la versión ${version.number} (${version._id}) en ${filePath}:`,
+      e instanceof Error ? e.message : e)
+    return c.json({ error: `El archivo de la versión ${version.number} no está en el disco del servidor. Vuelva a subirla.` }, 500)
+  }
+  if (total !== version.size) {
+    console.error(`[download] Tamaño distinto en ${filePath}: ${total} en disco, ${version.size} registrado`)
+    return c.json({ error: `El archivo de la versión ${version.number} en el servidor está dañado. Vuelva a subirla.` }, 500)
   }
 
   const headers: Record<string, string> = {

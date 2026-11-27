@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
-import { mkdir, open, rename, rm } from 'node:fs/promises'
+import { mkdir, open, rename, rm, stat, writeFile } from 'node:fs/promises'
 import type { IncomingMessage } from 'node:http'
 import { dirname, join } from 'node:path'
 import { Transform } from 'node:stream'
@@ -109,6 +109,25 @@ export async function deleteVersionFile(relativePath: string): Promise<void> {
 export async function cleanTempFiles(): Promise<void> {
   await rm(join(config.dataDir, 'tmp'), { recursive: true, force: true })
   await mkdir(join(config.dataDir, 'tmp'), { recursive: true })
+}
+
+/** Comprueba al arrancar que DATA_DIR existe y se puede escribir (si no, las subidas fallarían). */
+export async function checkDataDirWritable(): Promise<void> {
+  const probe = join(config.dataDir, `.write-test-${process.pid}`)
+  await mkdir(config.dataDir, { recursive: true })
+  await writeFile(probe, 'ok')
+  await rm(probe, { force: true })
+}
+
+export type FileStatus = 'ok' | 'missing' | 'sizeMismatch'
+
+/** Estado del jar de una versión en disco (para el panel y el arranque). */
+export async function fileStatus(relativePath: string, expectedSize: number): Promise<FileStatus> {
+  try {
+    return (await stat(absolutePath(relativePath))).size === expectedSize ? 'ok' : 'sizeMismatch'
+  } catch {
+    return 'missing'
+  }
 }
 
 /** Comprueba que el archivo empieza como un zip/jar ("PK\x03\x04"). */

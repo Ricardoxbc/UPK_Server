@@ -3,9 +3,9 @@ import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { secureHeaders } from 'hono/secure-headers'
 import { config } from './lib/config.js'
-import { admins, connect, disconnect } from './lib/db.js'
+import { admins, connect, disconnect, versions } from './lib/db.js'
 import { hashPassword } from './lib/auth.js'
-import { cleanTempFiles } from './lib/storage.js'
+import { checkDataDirWritable, cleanTempFiles, fileStatus } from './lib/storage.js'
 import { publicRoutes } from './routes/public.js'
 import { adminRoutes } from './routes/admin.js'
 import { panel } from './panel/index.js'
@@ -16,6 +16,14 @@ const app = new Hono<{ Bindings: HttpBindings }>()
 
 // same-origin: con no-referrer los navegadores envían "Origin: null" en los POST y fallaría la protección CSRF
 app.use('*', secureHeaders({ referrerPolicy: 'same-origin' }))
+// Log de la API (poco tráfico: una línea por petición) para diagnosticar desde los logs de EasyPanel
+app.use('/api/*', async (c, next) => {
+  const started = Date.now()
+  await next()
+  const line = `[api] ${c.req.method} ${c.req.path}${new URL(c.req.url).search} → ${c.res.status} (${Date.now() - started} ms)`
+  if (c.res.status >= 500) console.error(line)
+  else console.log(line)
+})
 // Límite de cuerpo para todo salvo las subidas de jar (que van en flujo a disco)
 app.use('*', async (c, next) => {
   if (c.req.method === 'POST' && UPLOAD_PATHS.has(c.req.path)) return next()
@@ -44,8 +52,28 @@ async function createInitialAdmin(): Promise<void> {
   console.log(`Administrador inicial "${username}" creado. Quite ADMIN_PASSWORD de las variables de entorno.`)
 }
 
+/** Avisa en el log si DATA_DIR no se puede escribir o si faltan jar de versiones publicadas. */
+async function checkStorage(): Promise<void> {
+  try {
+    await checkDataDirWritable()
+  } catch (e) {
+    console.error(`[storage] No se puede escribir en DATA_DIR=${config.dataDir}: ${e instanceof Error ? e.message : e}. ` +
+      'Las subidas fallarán. Revise el volumen montado en /data y sus permisos.')
+    return
+  }
+  const published = await versions().find({ state: 'published' }, { projection: { number: 1, path: 1, size: 1 } }).toArray()
+  for (const v of published) {
+    const status = await fileStatus(v.path, v.size)
+    if (status !== 'ok') {
+      console.error(`[storage] Versión publicada ${v.number} (${v._id}): archivo ${status === 'missing' ? 'FALTANTE' : 'con tamaño distinto'}. ` +
+        '¿DATA_DIR está en un volumen persistente? Vuelva a subir la versión.')
+    }
+  }
+}
+
 await connect()
-await cleanTempFiles()
+await checkStorage()
+await cleanTempFiles().catch((e) => console.error('[storage] No se pudo limpiar tmp:', e instanceof Error ? e.message : e))
 await createInitialAdmin()
 
 const server = serve({ fetch: app.fetch, port: config.port }, (info) => {

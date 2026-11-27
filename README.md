@@ -89,7 +89,9 @@ Panel: http://127.0.0.1:3000/panel · Salud: `/health`
 2. **Nuevo servicio App** → origen GitHub `Ricardoxbc/UPK_Server`, rama `main`, **Build Path `/`**
    (el Dockerfile está en la raíz del repo), construcción **Dockerfile**. Activar el despliegue
    automático al hacer push.
-3. **Montaje**: volumen en `/data` (aquí quedan los jar; incluirlo en los respaldos).
+3. **Montaje**: volumen en `/data` (aquí quedan los jar; incluirlo en los respaldos). **Imprescindible**:
+   sin volumen, cada redespliegue borra los jar y los clientes reciben error 500 al descargar (el panel
+   marca esas versiones como "archivo faltante" y el log del servicio lo avisa al arrancar).
 4. **Dominio**: la URL https que ofrece EasyPanel; puerto interno `3000`.
 5. **Variables de entorno** (ver `.env.example`): `MONGO_URL`, `MONGO_DB`, `SESSION_SECRET`,
    `PUBLIC_KEY_B64`, `BASE_URL`, `ADMIN_USER`, `ADMIN_PASSWORD`.
@@ -111,6 +113,17 @@ Para el cliente `X` con versión local `L`, solo con las versiones **publicadas 
 
 Para deshacer una versión: retirarla (el cliente vuelve a ver la anterior asignada, pero el
 Launcher nunca baja de versión) y publicar una nueva mayor.
+
+## Diagnóstico
+
+Logs del servicio (EasyPanel → servicio → Logs):
+- `[api] GET /api/v1/update?clientId=… → 200 (4 ms)`: una línea por petición del Launcher.
+- `[download] Falta el archivo de la versión …`: el jar no está en `DATA_DIR` (volumen no persistente).
+- `[storage] …`: al arrancar, `DATA_DIR` sin permiso de escritura o versiones publicadas sin archivo.
+
+En el panel: **Reportes** muestra el resultado de cada intento con el motivo del fallo, y
+**Versiones** marca "archivo faltante" / "archivo dañado". El nombre del jar subido no importa:
+siempre se guarda y se sirve como `app.jar`.
 
 ## API
 
