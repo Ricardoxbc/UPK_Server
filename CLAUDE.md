@@ -77,8 +77,6 @@ falla (403); por eso `same-origin`. Los `confirm()` del panel bloquean la automa
 POST con curl.
 
 ## Estado
-Desplegado en EasyPanel (versión anterior, nombres en español). La versión por cliente (2026-11-26) está verificada
-en local: reglas de asignación, descarga restringida, retiro, historial global, Launcher E2E (actualiza solo con su
-versión, ignora respuestas de otro cliente, no se actualiza con CLIENTE_DEMO). **Requiere** al redesplegar: renombrar
-variables (`ADMIN_USUARIO/ADMIN_CLAVE` → `ADMIN_USER/ADMIN_PASSWORD`, `NUEVA_API_URL` → `NEW_API_URL`,
-`ZONA_HORARIA` → `TIMEZONE`, `COOKIE_SEGURA` → `SECURE_COOKIE`) y vaciar la base (colecciones con nombres antiguos).
+Desplegado en EasyPanel con los nombres en inglés (variables renombradas, base limpia) y funcionando. Pendiente de
+desplegar y probar en el servidor real: panel rediseñado y página Launcher (autoactualización, verificada en local
+2026-11-27).
