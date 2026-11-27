@@ -114,6 +114,34 @@ Para el cliente `X` con versión local `L`, solo con las versiones **publicadas 
 Para deshacer una versión: retirarla (el cliente vuelve a ver la anterior asignada, pero el
 Launcher nunca baja de versión) y publicar una nueva mayor.
 
+## Launcher (autoactualización del propio Launcher.jar)
+
+Menú **Launcher** del panel. Hay **una sola versión actual** del Launcher para todos los clientes
+activos (no es por cliente); las anteriores quedan en el historial (se conservan los archivos de las
+3 últimas).
+
+**Publicar**: `Firmador publicar-launcher target/Launcher.jar private_key.b64 --url https://… [--notas "…"]`
+(o el formulario del panel con la firma de `Firmador firmar`). La versión es la `Implementation-Version`
+del jar = `<version>` del `pom.xml` del Launcher: **súbala antes de compilar**. El servidor rechaza el jar si:
+- la versión no es mayor que la actual (para volver atrás, se republica el código anterior con un número mayor);
+- el manifest dice otra versión, o `Main-Class` no es `com.upksoft.launcher.LauncherMain`;
+- la firma no es válida;
+- trae **otra clave pública** (`update_public_key.b64`): los equipos ya no podrían verificar nada más;
+- tiene clases para un Java mayor que 8.
+
+**Entrega**: `/update` agrega `launcher` (versión, sha256, firma y una URL firmada con HMAC que
+vence en 10 minutos) solo si el Launcher informó `launcherVersion` y es menor, el cliente está
+activo y la distribución no está en pausa (botón *Pausar distribución*). Los Launcher anteriores a
+1.1.0 no informan su versión ni saben autoactualizarse: se instalan a mano una vez.
+
+**Enlace público temporal**: el panel genera un enlace de descarga del Launcher actual que dura
+5/15/30/60 minutos y admite 1/3/10 descargas (las continuaciones `Range` no cuentan). Se muestra una
+sola vez (se guarda el hash), se puede revocar y queda en Auditoría.
+
+**Registro**: *Equipos* muestra la versión del Launcher de cada equipo (los antiguos, "antiguo"), y
+*Reportes de autoactualización* los resultados (`updated`, `failed`, `reverted`), que también salen en
+**Reportes** con la etiqueta *Launcher*.
+
 ## Diagnóstico
 
 Logs del servicio (EasyPanel → servicio → Logs):
@@ -129,11 +157,14 @@ siempre se guarda y se sirve como `app.jar`.
 
 | Método y ruta | Uso |
 |---|---|
-| `GET /api/v1/update?clientId=ID&version=X[&machine=PC&machineId=HASH&mode=servidor]` | Consulta del Launcher. Registra/actualiza el cliente y, si el registro de equipos está activo, el equipo |
+| `GET /api/v1/update?clientId=ID&version=X[&machine=PC&machineId=HASH&mode=servidor&launcherVersion=Y]` | Consulta del Launcher. Registra/actualiza el cliente y, si el registro de equipos está activo, el equipo |
 | `GET /api/v1/downloads/{versionId}?clientId=ID` | Jar de una versión publicada asignada a ese cliente (admite `Range`) |
 | `POST /api/v1/report` | `{clientId, machine, fromVersion, toVersion, result, detail}`; `result` = updated / cancelled / failed / reverted / skipped / postponed |
 | `POST /api/v1/identify` | `{clientId, version, machine, hasApp}`: el Launcher sin `launcher.properties` verifica ID + versión (última publicada). No crea clientes; registra cada intento (panel → Clientes → Identificaciones) |
 | `POST /api/admin/versions` | Subida (multipart: `jar`, `version`, `signature`, `sha256`, `notes`, `mandatory`, `isGlobal`, `publish`, `clientIds`). `Authorization: Bearer <token>` |
+| `GET /api/v1/launcher/downloads/{id}?clientId&expires&sig` | Launcher actual para la autoactualización (URL firmada que entrega `/update`, 10 min) |
+| `GET /api/v1/launcher/link/{token}` | Enlace público temporal creado en el panel |
+| `POST /api/admin/launcher` | Nueva versión del Launcher (multipart: `jar`, `version`, `signature`, `sha256`, `notes`). Con token |
 | `GET /api/admin/clients` | Clientes registrados (con token) |
 | `GET /health` | Comprobación de vida |
 
@@ -148,5 +179,6 @@ Si se define `NEW_API_URL`, la respuesta incluye `newApiUrl` y cada Launcher act
 
 ## Datos (MongoDB `upk_server`)
 
-`versions`, `clients`, `reports` (caducan a los 180 días), `admins`, `apiTokens` (solo el hash),
-`auditLog`. Los índices se crean al arrancar.
+`versions`, `clients`, `reports` (caducan a los 180 días; `component: launcher` para el Launcher), `admins`,
+`apiTokens` (solo el hash), `auditLog`, `launcherReleases`, `launcherLinks` (solo el hash; se borran 30 días
+después de vencer), `settings` (`_id: launcher` → `distribution`). Los índices se crean al arrancar.

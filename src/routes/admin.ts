@@ -5,6 +5,7 @@ import { requireApiToken, type AuthVariables } from '../lib/auth.js'
 import { clients } from '../lib/db.js'
 import { registerVersion, ValidationError } from '../lib/releases.js'
 import { registerComponentPackage } from '../lib/components.js'
+import { registerLauncherRelease } from '../lib/launcher.js'
 
 /** API de administración (la usa `Firmador publicar`). Requiere Authorization: Bearer <token>. */
 export const adminRoutes = new Hono<{ Bindings: HttpBindings; Variables: AuthVariables }>()
@@ -49,6 +50,19 @@ adminRoutes.post('/components', async (c) => {
     const message = e instanceof Error ? e.message : String(e)
     const isUserError = e instanceof ValidationError || e instanceof UploadError
     if (!isUserError) console.error('Error al subir paquete de componente:', e)
+    return c.json({ error: message }, isUserError ? 400 : 500)
+  }
+})
+
+/** Nueva versión del propio Launcher (la usa `Firmador publicar-launcher`). Queda como la actual. */
+adminRoutes.post('/launcher', async (c) => {
+  try {
+    const r = await registerLauncherRelease(await receiveMultipart(c.env.incoming), c.get('username'))
+    return c.json({ ok: true, id: r._id!.toHexString(), version: r.number, sha256: r.sha256, size: r.size }, 201)
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    const isUserError = e instanceof ValidationError || e instanceof UploadError
+    if (!isUserError) console.error('Error al subir el Launcher:', e)
     return c.json({ error: message }, isUserError ? 400 : 500)
   }
 })

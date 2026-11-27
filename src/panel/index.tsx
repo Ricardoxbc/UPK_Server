@@ -8,6 +8,7 @@ import { versionsPages } from './versionsPages.js'
 import { clientsPages } from './clientsPages.js'
 import { miscPages } from './miscPages.js'
 import { componentsPages } from './componentsPages.js'
+import { launcherPages } from './launcherPages.js'
 
 export const panel = new Hono<PanelEnv>()
 
@@ -72,4 +73,5 @@ panel.get('/', (c) => c.redirect('/panel/versions'))
 panel.route('/versions', versionsPages)
 panel.route('/clients', clientsPages)
 panel.route('/components', componentsPages)
+panel.route('/launcher', launcherPages)
 panel.route('/', miscPages)

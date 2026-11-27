@@ -5,11 +5,13 @@ import { ObjectId } from 'mongodb'
 import { absolutePath, createReadStream } from '../lib/storage.js'
 import { config } from '../lib/config.js'
 import {
-  audit, clientMachines, clients, componentPackages, componentReports, identifications, reports, versions,
+  audit, clientMachines, clients, componentPackages, componentReports, identifications, launcherLinks, launcherReleases,
+  reports, versions,
   COMPONENT_STATES, REPORT_RESULTS, type Client, type ComponentState, type IdentifyResult, type ReportResult,
 } from '../lib/db.js'
 import { checkClientKey, computeComponents, isValidClientKey, syncSettings } from '../lib/components.js'
 import { computeUpdate, touchClient } from '../lib/releases.js'
+import { checkDownloadSignature, hashLinkToken, launcherOffer } from '../lib/launcher.js'
 import { isValidClientId, maxVersion } from '../lib/version.js'
 
 export function clientIp(c: Context): string | null {
@@ -53,6 +55,7 @@ async function recordMachine(c: Context, client: Client, version: string): Promi
           machine: text(c.req.query('machine'), 100),
           mode: mode === 'servidor' || mode === 'cliente' ? mode : '',
           lastSeenAt: now, lastIp: clientIp(c), lastVersion: version,
+          ...(launcherVersion(c) ? { launcherVersion: launcherVersion(c) } : {}),
         },
         $setOnInsert: { firstSeenAt: now },
         $inc: { starts: 1 },
@@ -65,7 +68,17 @@ async function recordMachine(c: Context, client: Client, version: string): Promi
   }
 }
 
-/** Consulta del Launcher: GET /api/v1/update?clientId=ID&version=1.4.0[&machine=PC&machineId=hash&mode=servidor] */
+/** Versión del propio Launcher (parámetro launcherVersion); vacía en los Launcher antiguos. */
+function launcherVersion(c: Context): string {
+  const v = text(c.req.query('launcherVersion'), 40)
+  return /^\d{1,4}(\.\d{1,5}){0,3}$/.test(v) ? v : ''
+}
+
+/**
+ * Consulta del Launcher: GET /api/v1/update?clientId=ID&version=1.4.0
+ * [&machine=PC&machineId=hash&mode=servidor&launcherVersion=1.1.0]
+ * Si el Launcher informa su versión y hay una más nueva, la respuesta trae además "launcher".
+ */
 publicRoutes.get('/update', async (c) => {
   const clientId = text(c.req.query('clientId'), 60)
   const version = text(c.req.query('version'), 40)
@@ -79,8 +92,9 @@ publicRoutes.get('/update', async (c) => {
   const response = computeUpdate(client, version, assigned,
     (v) => `${base}/api/v1/downloads/${v._id!.toHexString()}?clientId=${encodeURIComponent(clientId)}`)
   if (config.newApiUrl) response.newApiUrl = config.newApiUrl
+  const launcher = await launcherOffer(client, launcherVersion(c), base)
   c.header('Cache-Control', 'no-store')
-  return c.json(response)
+  return c.json(launcher ? { ...response, launcher } : response)
 })
 
 // ---------- Identificación (launcher.properties perdido o equipo nuevo) ----------
@@ -225,7 +239,58 @@ publicRoutes.get('/downloads/:versionId', async (c) => {
     'application/java-archive', `app-${version.number}.jar`)
 })
 
-/** Resultado de cada intento de actualización del Launcher. */
+// ---------- Launcher.jar (autoactualización y enlaces públicos) ----------
+
+/**
+ * Descarga del Launcher para la autoactualización: URL firmada (HMAC) que entrega /update y caduca
+ * en pocos minutos. Solo la versión actual, para clientes activos.
+ */
+publicRoutes.get('/launcher/downloads/:releaseId', async (c) => {
+  const releaseId = c.req.param('releaseId')
+  const clientId = text(c.req.query('clientId'), 60)
+  const check = checkDownloadSignature(releaseId, clientId, c.req.query('expires') ?? '', c.req.query('sig') ?? '')
+  if (check !== 'ok') {
+    return c.json({ error: check === 'expired' ? 'El enlace de descarga caducó' : 'Enlace de descarga inválido' }, 403)
+  }
+  const id = parseObjectId(releaseId)
+  const release = id ? await launcherReleases().findOne({ _id: id, state: 'current' }) : null
+  const client = release ? await clients().findOne({ clientId, active: true }) : null
+  if (!release || !release.path || !client) return c.json({ error: 'Launcher no disponible' }, 404)
+  return sendFile(c, absolutePath(release.path), release.size, `el Launcher ${release.number}`,
+    'application/java-archive', 'Launcher.jar')
+})
+
+/**
+ * Enlace público temporal creado en el panel (soporte, equipos con un Launcher antiguo).
+ * Vale hasta su vencimiento y su número de descargas; las continuaciones (Range) no cuentan.
+ */
+publicRoutes.get('/launcher/link/:token', async (c) => {
+  const token = text(c.req.param('token'), 100)
+  const link = /^[A-Za-z0-9_-]{20,64}$/.test(token)
+    ? await launcherLinks().findOne({ tokenHash: hashLinkToken(token) })
+    : null
+  if (!link || link.revoked) return c.text('Enlace inválido o revocado.', 404)
+  if (link.expiresAt.getTime() < Date.now()) return c.text('Este enlace caducó. Pida uno nuevo a soporte.', 410)
+  const range = c.req.header('range')
+  const isContinuation = !!range && !/^bytes=0-/.test(range.trim())
+  if (!isContinuation) {
+    // Incremento atómico: dos descargas simultáneas no pueden pasar del máximo
+    const taken = await launcherLinks().findOneAndUpdate(
+      { _id: link._id, downloads: { $lt: link.maxDownloads } },
+      { $inc: { downloads: 1 }, $set: { lastDownloadAt: new Date(), lastIp: clientIp(c) } },
+    )
+    if (!taken) return c.text('Este enlace ya alcanzó su número máximo de descargas.', 410)
+  }
+  const release = await launcherReleases().findOne({ _id: link.releaseId })
+  if (!release || !release.path) return c.text('La versión de este enlace ya no está disponible.', 410)
+  if (!isContinuation) {
+    console.log(`[launcher] Enlace público: Launcher ${release.number} descargado (${clientIp(c) ?? '?'})`)
+  }
+  return sendFile(c, absolutePath(release.path), release.size, `el Launcher ${release.number}`,
+    'application/java-archive', 'Launcher.jar')
+})
+
+/** Resultado de cada intento de actualización del Launcher (de la app o del propio Launcher). */
 publicRoutes.post('/report', async (c) => {
   let body: Record<string, unknown>
   try {
@@ -241,8 +306,10 @@ publicRoutes.post('/report', async (c) => {
     return c.json({ error: `Campos requeridos: clientId y result (${REPORT_RESULTS.join('/')})` }, 400)
   }
   const ip = clientIp(c)
+  const component = text(body.component, 20) === 'launcher' ? 'launcher' : 'app'
   await reports().insertOne({
     clientId,
+    component,
     machine: text(body.machine, 100),
     fromVersion: text(body.fromVersion, 40),
     toVersion: text(body.toVersion, 40),
@@ -252,7 +319,7 @@ publicRoutes.post('/report', async (c) => {
     createdAt: new Date(),
   })
   // Tras actualizar o revertir, la versión instalada pasa a ser toVersion (sin esperar al próximo inicio)
-  const installed = (result === 'updated' || result === 'reverted') && text(body.toVersion, 40)
+  const installed = component === 'app' && (result === 'updated' || result === 'reverted') && text(body.toVersion, 40)
   await clients().updateOne({ clientId }, {
     $set: { lastSeenAt: new Date(), lastIp: ip, ...(installed ? { lastVersion: installed } : {}) },
   })

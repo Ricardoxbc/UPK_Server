@@ -74,7 +74,7 @@ miscPages.get('/reports', async (c) => {
           {list.map((r) => (
             <tr>
               <td>{formatDate(r.createdAt)}</td><td>{r.clientId}</td><td>{r.machine}</td>
-              <td>{r.fromVersion} → {r.toVersion}</td>
+              <td>{r.component === 'launcher' && <span class="tag global">Launcher</span>}{r.fromVersion} → {r.toVersion}</td>
               <td><span class={`tag ${r.result}`}>{RESULT_LABEL[r.result] ?? r.result}</span></td>
               <td class="muted">{r.detail}</td>
             </tr>

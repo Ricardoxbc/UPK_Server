@@ -10,7 +10,8 @@ import { publicRoutes } from './routes/public.js'
 import { adminRoutes } from './routes/admin.js'
 import { panel } from './panel/index.js'
 
-const UPLOAD_PATHS = new Set(['/api/admin/versions', '/panel/versions/new', '/api/admin/components', '/panel/components/new'])
+const UPLOAD_PATHS = new Set(['/api/admin/versions', '/panel/versions/new', '/api/admin/components', '/panel/components/new',
+  '/api/admin/launcher', '/panel/launcher/new'])
 
 const app = new Hono<{ Bindings: HttpBindings }>()
 

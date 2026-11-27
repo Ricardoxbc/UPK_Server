@@ -56,7 +56,60 @@ export interface ClientMachine {
   lastSeenAt: Date
   lastIp: string | null
   lastVersion: string
+  /** Versión del propio Launcher (Implementation-Version). Los Launcher antiguos no la envían. */
+  launcherVersion?: string
   starts: number
+}
+
+export type LauncherReleaseState = 'current' | 'archived'
+
+/**
+ * Versión del propio Launcher.jar. Solo una es la actual (state=current) y se entrega a todos los
+ * clientes activos mientras la distribución esté activada; las demás quedan como historial.
+ */
+export interface LauncherRelease {
+  _id?: ObjectId
+  number: string
+  state: LauncherReleaseState
+  notes: string
+  sha256: string
+  signature: string
+  size: number
+  /** Ruta relativa a DATA_DIR; null si el archivo se borró (historial antiguo). */
+  path: string | null
+  /** Versión de bytecode más alta encontrada en las clases del Launcher (52 = Java 8). */
+  classVersion: number
+  createdAt: Date
+  createdBy: string
+  /** Cuándo dejó de ser la actual. */
+  archivedAt: Date | null
+}
+
+/** Ajustes globales del Launcher (documento único _id="launcher" en settings). */
+export interface LauncherSettings {
+  _id: 'launcher'
+  /** false = pausa: ningún Launcher recibe la versión actual (los enlaces públicos siguen funcionando). */
+  distribution: boolean
+  updatedAt: Date
+  updatedBy: string
+}
+
+/** Enlace público temporal para descargar el Launcher actual (soporte / instalación manual). */
+export interface LauncherLink {
+  _id?: ObjectId
+  /** SHA-256 del token; el enlace completo solo se muestra al crearlo. */
+  tokenHash: string
+  releaseId: ObjectId
+  releaseNumber: string
+  note: string
+  expiresAt: Date
+  maxDownloads: number
+  downloads: number
+  revoked: boolean
+  createdAt: Date
+  createdBy: string
+  lastDownloadAt: Date | null
+  lastIp: string | null
 }
 
 /** Componentes que el Launcher sabe instalar (paquetes .zip firmados). */
@@ -119,9 +172,13 @@ export interface ComponentStatus {
 export const REPORT_RESULTS = ['updated', 'cancelled', 'failed', 'reverted', 'skipped', 'postponed'] as const
 export type ReportResult = (typeof REPORT_RESULTS)[number]
 
+/** Qué se actualizó: la app (app.jar) o el propio Launcher. Reportes antiguos sin campo = app. */
+export type ReportComponent = 'app' | 'launcher'
+
 export interface Report {
   _id?: ObjectId
   clientId: string
+  component?: ReportComponent
   machine: string
   fromVersion: string
   toVersion: string
@@ -215,6 +272,11 @@ async function createIndexes(d: Db): Promise<void> {
   await d.collection('admins').createIndex({ username: 1 }, { unique: true })
   await d.collection('apiTokens').createIndex({ hash: 1 }, { unique: true })
   await d.collection('auditLog').createIndex({ createdAt: -1 })
+  await d.collection('launcherReleases').createIndex({ state: 1 })
+  await d.collection('launcherReleases').createIndex({ number: 1 }, { unique: true })
+  await d.collection('launcherLinks').createIndex({ tokenHash: 1 }, { unique: true })
+  // Los enlaces caducados se borran solos 30 días después (quedan en la auditoría)
+  await d.collection('launcherLinks').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 30 * 24 * 3600 })
 }
 
 function collection<T extends object>(name: string): Collection<T> {
@@ -232,6 +294,9 @@ export const identifications = () => collection<Identification>('identifications
 export const admins = () => collection<Admin>('admins')
 export const apiTokens = () => collection<ApiToken>('apiTokens')
 export const auditLog = () => collection<AuditEntry>('auditLog')
+export const launcherReleases = () => collection<LauncherRelease>('launcherReleases')
+export const launcherLinks = () => collection<LauncherLink>('launcherLinks')
+export const settings = () => collection<LauncherSettings>('settings')
 
 export async function audit(username: string, action: string, detail = ''): Promise<void> {
   await auditLog().insertOne({ username, action, detail, createdAt: new Date() })

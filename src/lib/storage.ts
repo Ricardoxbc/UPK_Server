@@ -111,6 +111,15 @@ export async function storeComponentFile(tempPath: string, packageId: string): P
   return relativePath
 }
 
+/** Mueve el jar del Launcher a launcher/{id}/Launcher.jar y devuelve la ruta relativa. */
+export async function storeLauncherFile(tempPath: string, releaseId: string): Promise<string> {
+  const relativePath = join('launcher', releaseId, 'Launcher.jar')
+  const target = absolutePath(relativePath)
+  await mkdir(dirname(target), { recursive: true })
+  await rename(tempPath, target)
+  return relativePath
+}
+
 export async function deleteVersionFile(relativePath: string): Promise<void> {
   await rm(dirname(absolutePath(relativePath)), { recursive: true, force: true })
 }

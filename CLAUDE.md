@@ -44,6 +44,17 @@ Página del cliente en Sincronización: URI visible, comando `mongosh` (usuario 
 base, clave nueva en cada carga), *Probar webhook* (POST `event:"test"` desde el servidor al webhook guardado) y la
 descripción del cron en `cronText` de `PANEL_SCRIPT` (casos comunes; el resto dice "Personalizada").
 
+## Launcher (autoactualización) y panel
+`src/lib/launcher.ts` (`registerLauncherRelease` con validaciones: versión mayor, manifest = versión, Main-Class,
+**misma clave pública embebida**, bytecode ≤ 52; `launcherOffer`; URL firmada HMAC derivada de `SESSION_SECRET`,
+10 min; enlaces públicos con hash en `launcherLinks`) + `src/lib/zip.ts` (lector zip mínimo, sin dependencias) +
+`src/panel/launcherPages.tsx`. Una sola versión `current` para todos los clientes activos; `settings._id=launcher`
+→ `distribution` (pausa). `/update` agrega `launcher` solo si llega `launcherVersion` menor (Launchers < 1.1.0 no lo
+envían). Reportes con `component: 'launcher'` (no cambian `clients.lastVersion`); `clientMachines.launcherVersion`.
+Panel: menú lateral agrupado, modo oscuro automático, tokens CSS en `STYLESHEET`; subidas multipart por XHR con
+barra de progreso y botones deshabilitados (`PANEL_SCRIPT`; sigue `xhr.responseURL` tras la redirección);
+`?v=2` en style.css/panel.js para romper la caché de 1 h al cambiarlos.
+
 ## Registro de equipos (telemetría básica)
 `/update` recibe además `machine`, `machineId` (32 hex: SHA-256 del MachineGuid de Windows, lo calcula el Launcher) y
 `mode`; `recordMachine` hace upsert en `clientMachines` (único por clientId+machineId). Se desactiva por cliente
