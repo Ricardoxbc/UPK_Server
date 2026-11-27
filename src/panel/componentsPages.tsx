@@ -149,6 +149,16 @@ componentsPages.get('/clients/:clientId', async (c) => {
   const target = await targetPackage(s)
   const history = await componentReports().find({ clientId }).sort({ createdAt: -1 }).limit(20).toArray()
   const base = `/panel/components/clients/${encodeURIComponent(clientId)}`
+  // Comando para crear un usuario de Mongo limitado a la base de este cliente
+  const mongoDb = s.env.UPK_MONGODB_DB || clientId
+  const mongoUser = `upk_${clientId}`.replace(/[^A-Za-z0-9_-]/g, '_')
+  const mongoPass = randomBytes(18).toString('base64url')
+  const mongoUserScript = `use ${mongoDb}
+db.createUser({
+  user: "${mongoUser}",
+  pwd: "${mongoPass}",
+  roles: [{ role: "readWrite", db: "${mongoDb}" }]
+})`
   return c.html(
     <Layout title={`Sincronización · ${clientId}`} username={c.get('username')} active="/panel/components" ok={query(c, 'ok')} error={query(c, 'error')}>
       <p><a href="/panel/components">← Sincronización</a></p>
@@ -167,8 +177,11 @@ componentsPages.get('/clients/:clientId', async (c) => {
         {SYNC_ENV_KEYS.map((key) => (
           <>
             <label>{ENV_LABEL[key][0]}</label>
-            <input name={key} value={s.env[key] ?? ''} placeholder={ENV_LABEL[key][1]}
-              type={key === 'UPK_MONGODB_URI' ? 'password' : 'text'} autocomplete="off" />
+            <div>
+              <input name={key} value={s.env[key] ?? ''} placeholder={ENV_LABEL[key][1]} autocomplete="off" spellcheck={false}
+                style="width:100%" {...(key === 'SYNC_CRON' ? { 'data-cron': '' } : {})} />
+              {key === 'SYNC_CRON' && <div class="muted" data-cron-text></div>}
+            </div>
           </>
         ))}
         <span></span>
@@ -178,6 +191,23 @@ componentsPages.get('/clients/:clientId', async (c) => {
       </form>
       {s.enabled && !target && <div class="msg err">Activado, pero no hay paquetes subidos: no se instalará nada.</div>}
       {s.enabled && !s.env.UPK_MONGODB_URI && <div class="msg err">Falta la URI de MongoDB: el servicio usará la del registro o .env del equipo, si existe.</div>}
+
+      <h2>Webhook</h2>
+      <div class="box actions" style="justify-content:space-between">
+        <div class="muted">Envía un POST de prueba (<code>event: "test"</code>) al webhook <b>guardado</b>, desde este servidor.</div>
+        <form method="post" action={`${base}/webhook-test`}>
+          <button disabled={!s.env.UPK_WEBHOOK_URL}>Probar webhook</button>
+        </form>
+      </div>
+
+      <h2>Usuario de MongoDB para este cliente</h2>
+      <p class="muted">Un usuario que solo puede leer y escribir la base <b>{mongoDb}</b>: si alguien saca la URI del equipo
+        del cliente, no ve los datos de los demás. Ejecútelo en <code>mongosh</code> conectado como administrador y use ese
+        usuario en la URI de arriba. La clave se genera al abrir esta página. En MongoDB Atlas: <i>Database Access → Add New
+        Database User</i>, rol <code>readWrite</code> sobre <code>{mongoDb}</code>.</p>
+      <pre class="box" style="user-select:all;white-space:pre-wrap">{mongoUserScript}</pre>
+      <p class="muted">URI resultante (cambie <code>HOST</code> por el de su servidor de MongoDB):</p>
+      <pre class="box" style="user-select:all;white-space:pre-wrap">{`mongodb://${mongoUser}:${mongoPass}@HOST/${mongoDb}?authSource=${mongoDb}`}</pre>
 
       <h2>Equipo vinculado</h2>
       <div class="box actions" style="justify-content:space-between">
@@ -254,6 +284,45 @@ componentsPages.post('/clients/:clientId', async (c) => {
   return redirectWith(c, base, 'ok', enabled
     ? 'Guardado. El Launcher del equipo servidor lo instalará o actualizará en su próximo inicio.'
     : 'Guardado. El Launcher del equipo servidor lo desinstalará en su próximo inicio.')
+})
+
+/** Prueba del webhook guardado: mismo formato que envía el servicio, con event "test". */
+componentsPages.post('/clients/:clientId/webhook-test', async (c) => {
+  const clientId = c.req.param('clientId')
+  const base = `/panel/components/clients/${encodeURIComponent(clientId)}`
+  const cl = await clients().findOne({ clientId })
+  if (!cl) return redirectWith(c, '/panel/components', 'error', 'Cliente no encontrado')
+  const s = syncSettings(cl)
+  const url = s.env.UPK_WEBHOOK_URL
+  if (!url) return redirectWith(c, base, 'error', 'No hay webhook guardado')
+  if (!/^https?:\/\//i.test(url)) return redirectWith(c, base, 'error', 'El webhook debe empezar con http:// o https://')
+  const started = Date.now()
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'UPK-Server/webhook-test' },
+      body: JSON.stringify({
+        event: 'test',
+        timestamp: new Date().toISOString(),
+        database: s.env.UPK_MONGODB_DB ?? '',
+        clientId,
+        summary: 'Prueba enviada desde el panel de UPK Server',
+        changes: {
+          categories: { upserts: 0, deletes: 0 }, products: { upserts: 0, deletes: 0 },
+          productsKg: { upserts: 0, deletes: 0 }, repairedCategories: 0, totalUpserts: 0, totalDeletes: 0,
+        },
+        elapsedMs: 0,
+      }),
+      signal: AbortSignal.timeout(10000),
+    })
+    const body = (await res.text()).slice(0, 200)
+    await audit(c.get('username'), 'component.webhook.test', `${clientId}: HTTP ${res.status}`)
+    return redirectWith(c, base, res.ok ? 'ok' : 'error',
+      `Webhook respondió HTTP ${res.status} en ${Date.now() - started} ms${body ? `: ${body}` : ''}`)
+  } catch (e) {
+    const msg = e instanceof Error ? (e.name === 'TimeoutError' ? 'sin respuesta en 10 s' : e.message) : String(e)
+    return redirectWith(c, base, 'error', `No se pudo contactar el webhook: ${msg}`)
+  }
 })
 
 componentsPages.post('/clients/:clientId/reset', async (c) => {

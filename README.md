@@ -129,7 +129,7 @@ siempre se guarda y se sirve como `app.jar`.
 
 | Método y ruta | Uso |
 |---|---|
-| `GET /api/v1/update?clientId=ID&version=X` | Consulta del Launcher. Registra/actualiza el cliente |
+| `GET /api/v1/update?clientId=ID&version=X[&machine=PC&machineId=HASH&mode=servidor]` | Consulta del Launcher. Registra/actualiza el cliente y, si el registro de equipos está activo, el equipo |
 | `GET /api/v1/downloads/{versionId}?clientId=ID` | Jar de una versión publicada asignada a ese cliente (admite `Range`) |
 | `POST /api/v1/report` | `{clientId, machine, fromVersion, toVersion, result, detail}`; `result` = updated / cancelled / failed / reverted / skipped / postponed |
 | `POST /api/v1/identify` | `{clientId, version, machine, hasApp}`: el Launcher sin `launcher.properties` verifica ID + versión (última publicada). No crea clientes; registra cada intento (panel → Clientes → Identificaciones) |

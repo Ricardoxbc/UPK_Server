@@ -38,6 +38,25 @@ export interface Client {
   createdAt: Date
   /** Servicio de sincronización (UPK Sync) que el Launcher del equipo servidor instala o desinstala. */
   syncService?: SyncServiceSettings
+  /** Registro de equipos (clientMachines). undefined = activado. */
+  telemetry?: boolean
+}
+
+/**
+ * Equipo distinto que usó un cliente.id (telemetría básica): uno por (clientId, machineId). Sirve para
+ * ver si un Launcher se copió a otra PC con su launcher.properties. machineId = hash del MachineGuid.
+ */
+export interface ClientMachine {
+  _id?: ObjectId
+  clientId: string
+  machineId: string
+  machine: string
+  mode: 'servidor' | 'cliente' | ''
+  firstSeenAt: Date
+  lastSeenAt: Date
+  lastIp: string | null
+  lastVersion: string
+  starts: number
 }
 
 /** Componentes que el Launcher sabe instalar (paquetes .zip firmados). */
@@ -190,6 +209,7 @@ async function createIndexes(d: Db): Promise<void> {
   await d.collection('componentPackages').createIndex({ component: 1, number: 1 }, { unique: true })
   await d.collection('componentReports').createIndex({ clientId: 1, createdAt: -1 })
   await d.collection('componentReports').createIndex({ createdAt: 1 }, { expireAfterSeconds: 180 * 24 * 3600 })
+  await d.collection('clientMachines').createIndex({ clientId: 1, machineId: 1 }, { unique: true })
   await d.collection('identifications').createIndex({ createdAt: -1 })
   await d.collection('identifications').createIndex({ createdAt: 1 }, { expireAfterSeconds: 365 * 24 * 3600 })
   await d.collection('admins').createIndex({ username: 1 }, { unique: true })
@@ -207,6 +227,7 @@ export const clients = () => collection<Client>('clients')
 export const reports = () => collection<Report>('reports')
 export const componentPackages = () => collection<ComponentPackage>('componentPackages')
 export const componentReports = () => collection<ComponentReport>('componentReports')
+export const clientMachines = () => collection<ClientMachine>('clientMachines')
 export const identifications = () => collection<Identification>('identifications')
 export const admins = () => collection<Admin>('admins')
 export const apiTokens = () => collection<ApiToken>('apiTokens')

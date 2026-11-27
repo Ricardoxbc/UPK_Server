@@ -40,10 +40,20 @@ La auditoría nunca guarda la URI. Guía: `../UPK_Launcher/docs/SINCRONIZACION_R
 Reinicio del estado: el panel fija `syncService.resetId` (aleatorio); `/components` lo envía como `resetId` y el
 reporte que trae el mismo `resetId` lo limpia (`resetDoneAt`).
 
+Página del cliente en Sincronización: URI visible, comando `mongosh` (usuario `upk_<cliente>` con `readWrite` solo en su
+base, clave nueva en cada carga), *Probar webhook* (POST `event:"test"` desde el servidor al webhook guardado) y la
+descripción del cron en `cronText` de `PANEL_SCRIPT` (casos comunes; el resto dice "Personalizada").
+
+## Registro de equipos (telemetría básica)
+`/update` recibe además `machine`, `machineId` (32 hex: SHA-256 del MachineGuid de Windows, lo calcula el Launcher) y
+`mode`; `recordMachine` hace upsert en `clientMachines` (único por clientId+machineId). Se desactiva por cliente
+(`clients.telemetry=false`, casilla *Registrar equipos* en Clientes). Clientes muestra equipos de los últimos 30 días
+y marca en rojo más de uno en modo servidor; detalle en `/panel/clients/:id/machines`. Launchers viejos no lo envían.
+
 ## Identificación (launcher.properties perdido)
 `POST /api/v1/identify {clientId, version, machine, hasApp}` (en `routes/public.ts`): **no crea clientes**
 (a diferencia de `/update`). Acepta solo cliente existente + activo + versión = mayor publicada para él
-(`expectedVersion`; sin publicadas, `lastVersion`). Mismo 403 para ID y versión (no revela si el ID existe); 5 fallos
+(`expectedVersion`; sin publicadas, `lastVersion`), comparada como **texto exacto** ("1.0" ≠ "1.0.0", a propósito). Mismo 403 para ID y versión (no revela si el ID existe); 5 fallos
 por IP → 429 durante 15 min (en memoria). Cada intento va a `identifications` (365 días) y se ve en *Clientes*.
 
 ## Probar en local

@@ -5,12 +5,12 @@ import { ObjectId } from 'mongodb'
 import { absolutePath, createReadStream } from '../lib/storage.js'
 import { config } from '../lib/config.js'
 import {
-  audit, clients, componentPackages, componentReports, identifications, reports, versions,
+  audit, clientMachines, clients, componentPackages, componentReports, identifications, reports, versions,
   COMPONENT_STATES, REPORT_RESULTS, type Client, type ComponentState, type IdentifyResult, type ReportResult,
 } from '../lib/db.js'
 import { checkClientKey, computeComponents, isValidClientKey, syncSettings } from '../lib/components.js'
 import { computeUpdate, touchClient } from '../lib/releases.js'
-import { compareVersions, isValidClientId, maxVersion } from '../lib/version.js'
+import { isValidClientId, maxVersion } from '../lib/version.js'
 
 export function clientIp(c: Context): string | null {
   const forwarded = c.req.header('x-forwarded-for')
@@ -36,7 +36,36 @@ function parseObjectId(v: string): ObjectId | null {
 
 export const publicRoutes = new Hono()
 
-/** Consulta del Launcher: GET /api/v1/update?clientId=ID&version=1.4.0 */
+/**
+ * Registro de equipos (desactivable por cliente): cada Launcher manda machineId (hash del MachineGuid,
+ * 32 hex), machine (nombre) y mode. Los Launcher antiguos no lo mandan y no se registran.
+ */
+async function recordMachine(c: Context, client: Client, version: string): Promise<void> {
+  const machineId = text(c.req.query('machineId'), 64).toLowerCase()
+  if (client.telemetry === false || !/^[a-f0-9]{16,64}$/.test(machineId)) return
+  const mode = text(c.req.query('mode'), 10)
+  const now = new Date()
+  try {
+    await clientMachines().updateOne(
+      { clientId: client.clientId, machineId },
+      {
+        $set: {
+          machine: text(c.req.query('machine'), 100),
+          mode: mode === 'servidor' || mode === 'cliente' ? mode : '',
+          lastSeenAt: now, lastIp: clientIp(c), lastVersion: version,
+        },
+        $setOnInsert: { firstSeenAt: now },
+        $inc: { starts: 1 },
+      },
+      { upsert: true },
+    )
+  } catch (e) {
+    // Nunca impide la consulta de actualizaciones
+    console.error('[machines] No se pudo registrar el equipo:', e instanceof Error ? e.message : e)
+  }
+}
+
+/** Consulta del Launcher: GET /api/v1/update?clientId=ID&version=1.4.0[&machine=PC&machineId=hash&mode=servidor] */
 publicRoutes.get('/update', async (c) => {
   const clientId = text(c.req.query('clientId'), 60)
   const version = text(c.req.query('version'), 40)
@@ -44,6 +73,7 @@ publicRoutes.get('/update', async (c) => {
     return c.json({ error: 'Parámetros requeridos: clientId (válido) y version' }, 400)
   }
   const client = await touchClient(clientId, version, clientIp(c))
+  await recordMachine(c, client, version)
   const assigned = await versions().find({ state: 'published', clientIds: clientId }).toArray()
   const base = publicBaseUrl(c)
   const response = computeUpdate(client, version, assigned,
@@ -55,7 +85,7 @@ publicRoutes.get('/update', async (c) => {
 
 // ---------- Identificación (launcher.properties perdido o equipo nuevo) ----------
 // El usuario escribe cliente.id y versión: se acepta solo si el cliente existe, está activo y la
-// versión es exactamente la última publicada para él (la que le indica soporte). Cada intento queda
+// versión es exactamente (mismo texto) la última publicada para él (la que le indica soporte). Cada intento queda
 // registrado y se ve en el panel (Clientes → Identificaciones). Tras 5 fallos, la IP espera 15 minutos.
 const identifyFailures = new Map<string, { count: number; since: number }>()
 const IDENTIFY_WINDOW_MS = 15 * 60 * 1000
@@ -114,7 +144,8 @@ publicRoutes.post('/identify', async (c) => {
   else if (!client.active) result = 'inactive'
   else {
     const expected = await expectedVersion(client)
-    if (!expected || compareVersions(expected, version) !== 0) result = 'version_mismatch'
+    // Texto exacto: "1.0" no vale por "1.0.0" (más difícil de adivinar)
+    if (!expected || expected !== version) result = 'version_mismatch'
   }
   await record(result)
   if (result !== 'ok') {

@@ -150,6 +150,30 @@ document.querySelectorAll('[data-picker]').forEach(function (picker) {
   boxes.forEach(function (b) { b.addEventListener('change', refresh); });
   refresh();
 });
+// Texto legible de la expresión cron del servicio de sincronización (casos comunes)
+function cronText(v) {
+  v = v.trim();
+  if (!v) return 'Vacío: cada 5 minutos (valor por defecto del servicio)';
+  var p = v.split(/\\s+/);
+  if (p.length !== 5) return 'No válida: deben ser 5 campos (minuto hora día mes día-semana)';
+  var m = p[0], h = p[1], num = /^\\d+$/, rango = /^(\\d+)-(\\d+)$/;
+  function cada(x) { var r = /^\\*\\/(\\d+)$/.exec(x); return r ? +r[1] : (x === '*' ? 1 : null); }
+  function hh(x) { return ('0' + x).slice(-2); }
+  function min(n) { return n === 1 ? 'Cada minuto' : 'Cada ' + n + ' minutos'; }
+  if (p.slice(2).join(' ') !== '* * *') return 'Personalizada (limita día, mes o día de la semana): ' + v;
+  if (cada(m) && h === '*') return min(cada(m));
+  if (cada(m) && rango.test(h)) { var r = rango.exec(h); return min(cada(m)) + ', de ' + hh(r[1]) + ':00 a ' + hh(r[2]) + ':59'; }
+  if (num.test(m) && h === '*') return 'Cada hora, en el minuto ' + m;
+  if (num.test(m) && cada(h)) return 'Cada ' + cada(h) + ' horas, en el minuto ' + m;
+  if (num.test(m) && num.test(h)) return 'Todos los días a las ' + hh(h) + ':' + hh(m);
+  return 'Personalizada: ' + v;
+}
+document.querySelectorAll('input[data-cron]').forEach(function (input) {
+  var out = input.parentNode.querySelector('[data-cron-text]');
+  function refresh() { out.textContent = cronText(input.value); }
+  input.addEventListener('input', refresh);
+  refresh();
+});
 document.querySelectorAll('form[data-confirm-clients]').forEach(function (form) {
   form.addEventListener('submit', function (e) {
     var publish = form.querySelector('[name=publish]');
