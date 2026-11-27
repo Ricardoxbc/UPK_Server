@@ -77,6 +77,5 @@ falla (403); por eso `same-origin`. Los `confirm()` del panel bloquean la automa
 POST con curl.
 
 ## Estado
-Desplegado en EasyPanel con los nombres en inglés (variables renombradas, base limpia) y funcionando. Pendiente de
-desplegar y probar en el servidor real: panel rediseñado y página Launcher (autoactualización, verificada en local
-2026-11-27).
+Desplegado en EasyPanel (nombres en inglés) y probado en el servidor real: funciona, incluidos el panel rediseñado y
+la página Launcher. El despliegue automático por webhook de GitHub funciona (push a `main` → EasyPanel despliega).
