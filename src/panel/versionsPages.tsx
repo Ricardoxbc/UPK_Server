@@ -138,10 +138,14 @@ versionsPages.get('/:id', async (c) => {
               <button class="primary">Publicar para {v.clientIds.length} cliente(s)</button></form>
           : <form class="inline" method="post" action={`${base}/state`} onsubmit="return confirm('¿Retirar? Dejará de ofrecerse a sus clientes.')">
               <input type="hidden" name="state" value="retired" /><button class="danger">Retirar</button></form>}
-        {v.state !== 'published' && (
-          <form class="inline" method="post" action={`${base}/delete`} onsubmit="return confirm('¿Eliminar la versión y su archivo? No se puede deshacer.')">
-            <button class="danger">Eliminar</button></form>
-        )}
+        {v.state !== 'published'
+          ? <form class="inline" method="post" action={`${base}/delete`} onsubmit="return confirm('¿Eliminar la versión y su archivo? No se puede deshacer.')">
+              <button class="danger">Eliminar</button></form>
+          // Atajo: retirar y eliminar en un paso (dejará de ofrecerse y se borra el archivo)
+          : <form class="inline" method="post" action={`${base}/delete`}
+              onsubmit={`return confirm('¿Retirar y eliminar ${v.number}? Dejará de ofrecerse a ${v.clientIds.length} cliente(s) y se borrará su archivo. No se puede deshacer.')`}>
+              <input type="hidden" name="retire" value="1" />
+              <button class="danger">Retirar y eliminar</button></form>}
       </div>
 
       <h2>Datos</h2>
@@ -222,9 +226,14 @@ versionsPages.post('/:id/delete', async (c) => {
   const id = toObjectId(c.req.param('id'))
   const v = id ? await versions().findOne({ _id: id }) : null
   if (!v) return redirectWith(c, '/panel/versions', 'error', 'Versión no encontrada')
-  if (v.state === 'published') return redirectWith(c, `/panel/versions/${v._id}`, 'error', 'Retire la versión antes de eliminarla')
+  // Una publicada solo se elimina con el botón "Retirar y eliminar" (retire=1), que pide confirmación aparte
+  const retire = String((await c.req.parseBody()).retire ?? '') === '1'
+  if (v.state === 'published' && !retire) {
+    return redirectWith(c, `/panel/versions/${v._id}`, 'error', 'Retire la versión antes de eliminarla')
+  }
   await versions().deleteOne({ _id: v._id })
   await deleteVersionFile(v.path)
-  await audit(c.get('username'), 'version.delete', v.number)
+  await audit(c.get('username'), v.state === 'published' ? 'version.retire+delete' : 'version.delete',
+    `${v.number}${v.state === 'published' ? ` → ${v.clientIds.join(', ')}` : ''}`)
   return redirectWith(c, '/panel/versions', 'ok', `Versión ${v.number} eliminada.`)
 })
