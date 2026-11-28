@@ -67,6 +67,15 @@ y marca en rojo más de uno en modo servidor; detalle en `/panel/clients/:id/mac
 (`expectedVersion`; sin publicadas, `lastVersion`), comparada como **texto exacto** ("1.0" ≠ "1.0.0", a propósito). Mismo 403 para ID y versión (no revela si el ID existe); 5 fallos
 por IP → 429 durante 15 min (en memoria). Cada intento va a `identifications` (365 días) y se ve en *Clientes*.
 
+## Sitio público (presentación y manual)
+`src/site/`: `/` presentación (`landingPage.tsx`) y `/manual` (`manualPage.tsx`), sin sesión ni BD; el panel sigue en
+`/panel` (antes `/` redirigía a `/panel/versions`). CSS y JS en `siteStyles.ts`/`siteScript.ts` servidos en `/site/site.css` y
+`/site/site.js` (caché 1 h: subir `SITE_ASSET_VERSION` en `siteLayout.tsx` al cambiarlos). Iconos originales de UPK embebidos en
+base64 (`icons.ts`, `/site/img/<nombre>.png`): no hace falta copiar archivos en el Dockerfile. Las "escenas" de la presentación
+son maquetas HTML animadas por `SITE_SCRIPT` (cursor, clics, escritura, contadores), corren solo visibles y respetan
+`prefers-reduced-motion`; se diseñan a 600 px y en pantallas estrechas se reducen con `zoom`. `DEMO_URL` (opcional) muestra los
+botones de la demo. El manual cubre la app completa (no la demo); no usar capturas reales: tienen datos de clientes.
+
 ## Probar en local
 Mongo temporal: `mongod --dbpath <tmp> --port 27099` (MongoDB 7 en `C:\Program Files\MongoDB`; el servicio de Windows
 está detenido, no tocarlo). Env en un archivo fuera del repo con `SECURE_COOKIE=false`;

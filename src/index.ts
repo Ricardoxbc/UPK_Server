@@ -9,6 +9,7 @@ import { checkDataDirWritable, cleanTempFiles, fileStatus } from './lib/storage.
 import { publicRoutes } from './routes/public.js'
 import { adminRoutes } from './routes/admin.js'
 import { panel } from './panel/index.js'
+import { site } from './site/index.js'
 
 const UPLOAD_PATHS = new Set(['/api/admin/versions', '/panel/versions/new', '/api/admin/components', '/panel/components/new',
   '/api/admin/launcher', '/panel/launcher/new'])
@@ -31,11 +32,12 @@ app.use('*', async (c, next) => {
   return bodyLimit({ maxSize: 256 * 1024 })(c, next)
 })
 
-app.get('/', (c) => c.redirect('/panel/versions'))
 app.get('/health', (c) => c.json({ ok: true }))
 app.route('/api/v1', publicRoutes)
 app.route('/api/admin', adminRoutes)
 app.route('/panel', panel)
+// Sitio público: presentación en / y manual en /manual (el panel sigue en /panel)
+app.route('/', site)
 
 app.onError((e, c) => {
   console.error(`Error en ${c.req.method} ${c.req.path}:`, e)

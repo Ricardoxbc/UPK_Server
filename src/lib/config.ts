@@ -34,6 +34,8 @@ export const config = {
   /** Cookies Secure (desactivar solo en desarrollo local por http). */
   secureCookie: process.env.SECURE_COOKIE !== 'false',
   timeZone: process.env.TIMEZONE?.trim() || 'America/Lima',
+  /** URL pública de la demo web (UPK_Demo en Vercel). Sin ella, el sitio oculta los botones de la demo. */
+  demoUrl: process.env.DEMO_URL?.trim() || null,
 }
 
 if (config.sessionSecret.length < 32) {
